@@ -773,13 +773,13 @@ function rPacientes(){
 /* ---------- pré-consulta enviada pelo paciente (arquivo .json do formulário pre_consulta.html) ---------- */
 const PRE_ROTULOS = { condicoes:'Diagnósticos', condicoes_outra:'Outro diagnóstico', cirurgias:'Cirurgias ou internações', medicamentos:'Medicamentos', suplementos:'Suplementos e chás', alergias:'Alergias e intolerâncias', restricoes:'Restrições alimentares', dia_tipico:'Dia típico', fora:'Come fora ou delivery', atividade:'Atividade física', sono:'Sono (horas/noite)', alcool:'Álcool', tabaco:'Tabaco' };
 const PRE_FICHA = [
-  ['fQueixa', ['motivo']],
-  ['fHist', ['condicoes','condicoes_outra','cirurgias']],
-  ['fMed', ['medicamentos','suplementos']],
-  ['fAlerg', ['alergias','restricoes']],
-  ['fHab', ['dia_tipico','fora']],
-  ['fAtiv', ['atividade','sono','alcool','tabaco']],
-  ['fExam', ['exames']]
+  ['queixa', ['motivo']],
+  ['hist', ['condicoes','condicoes_outra','cirurgias']],
+  ['med', ['medicamentos','suplementos']],
+  ['alerg', ['alergias','restricoes']],
+  ['hab', ['dia_tipico','fora']],
+  ['ativ', ['atividade','sono','alcool','tabaco']],
+  ['exam', ['exames']]
 ];
 /* seções da pré-consulta, na ordem do formulário pre_consulta.html */
 const PRE_SECOES = [
@@ -901,6 +901,11 @@ function preCard(p){
       sec.itens.map(a => `<div style="border-top:1px solid var(--line);padding:8px 0"><b>${esc(a.pergunta)}</b><div style="white-space:pre-wrap">${esc(a.resposta)}</div></div>`).join('')).join('')}
   </div>`;
 }
+/* texto de orientação do modelo de anamnese (sem dado do paciente) */
+function soTextoDeModelo(t){
+  const limpo = String(t).trim();
+  return Object.values(MODELOS_ANAM).some(m => Object.values(m.campos).some(txt => txt.trim() === limpo));
+}
 function aplicarPreConsulta(){
   const p = pac();
   if(!p || !p.preconsulta) return;
@@ -908,7 +913,8 @@ function aplicarPreConsulta(){
   p.ficha = p.ficha || {};
   let n = 0;
   PRE_FICHA.forEach(([campo, ids]) => {
-    if(String(p.ficha[campo] || '').trim()) return;
+    const atual = String(p.ficha[campo] || '').trim();
+    if(atual && !soTextoDeModelo(atual)) return;
     const linhas = ids.map(id => {
       const val = String(r[id] || '').trim();
       if(!val) return '';
@@ -1094,7 +1100,7 @@ function rPront(){
   el.innerHTML = `
   ${preCard(p)}
   <div class="card"><h2>Ficha clínica · ${esc(p.nome)}</h2>
-    <div class="row" style="align-items:flex-end;margin-bottom:10px"><label style="flex:0 1 280px">Modelo de anamnese<select id="fModelo">${Object.entries(MODELOS_ANAM).map(([k, m]) => `<option value="${k}">${m.nome}</option>`).join('')}</select></label><button class="btn sec mini" onclick="aplicarModelo()">Preencher campos vazios</button></div>
+    <div class="row" style="align-items:flex-end;margin-bottom:10px"><label style="flex:0 1 280px">Modelo de anamnese<select id="fModelo">${Object.entries(MODELOS_ANAM).map(([k, m]) => `<option value="${k}">${m.nome}</option>`).join('')}</select></label><button class="btn sec mini" onclick="aplicarModelo()">Inserir modelo nos campos vazios</button></div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
       ${ta('fQueixa','Queixa principal', f.queixa)}
       ${ta('fHist','História clínica e doenças prévias', f.hist)}
