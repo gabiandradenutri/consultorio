@@ -50,8 +50,8 @@
 </header>
 <main>
   <div class="aviso">
-    Não precisa ter todos os exames à mão: responda o que souber. Suas respostas ficam apenas no seu celular até você enviá-las
-    para a nutricionista. Nada é enviado pela internet automaticamente. Ao final, toque em <b>Gerar arquivo para enviar</b> e envie o arquivo gerado pelo WhatsApp.
+    Não precisa ter todos os exames à mão: responda o que souber. Ao final, toque em <b>Enviar para a nutricionista</b>.
+    Suas respostas vão direto para a nutricionista, sem precisar mandar arquivo pelo WhatsApp.
   </div>
 
   <div class="erro" id="erro" role="alert"></div>
@@ -66,14 +66,12 @@
       </label>
     </div>
 
-    <button class="btn" type="submit" id="gerar">Gerar arquivo para enviar</button>
+    <button class="btn" type="submit" id="gerar">Enviar para a nutricionista</button>
   </form>
 
   <div class="sucesso" id="sucesso" role="status">
-    <h2>Arquivo gerado</h2>
-    <p>Envie o arquivo <b id="nomeArquivo"></b> para a nutricionista pelo WhatsApp, como anexo.</p>
-    <p>Se o arquivo não tiver sido baixado, toque em <b>Baixar novamente</b>.</p>
-    <button class="btn" type="button" id="baixarNovamente" style="margin-top:10px;background:var(--accent)">Baixar novamente</button>
+    <h2>Respostas enviadas</h2>
+    <p>Obrigada. A nutricionista já recebeu suas respostas e vai revisá-las antes da consulta.</p>
   </div>
 
   <p class="rodape">Pré-consulta nutricional. Em caso de dúvida, pergunte à nutricionista antes de enviar.</p>
@@ -83,6 +81,8 @@
 (function(){
   'use strict';
   const CHAVE_RASCUNHO = 'preconsulta-rascunho-v1';
+  /* URL do Apps Script publicado pela nutricionista (termina em /exec?k=...). Ver scripts/preconsulta_apps_script.gs */
+  const ENDPOINT = 'https://script.google.com/macros/s/AKfycbyhv3Q_Ih7A6zIqXD5CPfswhDf5YaMdjc-Q3CV_V0aGCwzV_LjPFhUj7-BYfz_tctJb/exec?k=1234';
 
   /* Perguntas. tipo: texto | data | numero | tel | area | radio | check
      obrig: campo obrigatório. identificacao: campo usado para localizar o cadastro. */
@@ -245,14 +245,8 @@
     };
   }
 
-  let ultimoBlob = null, ultimoNome = '';
-  function baixar(blob, nome){
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = nome;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-  }
-
+  /* envio direto para a nutricionista (Google Drive dela, via Apps Script). Sem login: o modo no-cors
+     não permite ler a resposta, então a confirmação real é a presença do arquivo no Drive. */
   $('form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     limparErro();
@@ -260,17 +254,21 @@
     r.consentimento = $('consentimento').checked;
     const erro = validar(r);
     if(erro){ mostrarErro(erro); return; }
+    if(ENDPOINT.indexOf('COLE_') !== -1){ mostrarErro('Formulário ainda não configurado. Avise a nutricionista.'); return; }
 
-    const arquivo = montarArquivo(r);
-    ultimoNome = 'pre-consulta_' + nomeSeguro(r.nome) + '_' + new Date().toISOString().slice(0,10) + '.json';
-    ultimoBlob = new Blob([JSON.stringify(arquivo, null, 2)], { type: 'application/json' });
-    $('nomeArquivo').textContent = ultimoNome;
-    $('sucesso').classList.add('ativo');
-    $('sucesso').scrollIntoView({ behavior:'smooth', block:'start' });
-    baixar(ultimoBlob, ultimoNome);
+    const botao = $('gerar');
+    botao.disabled = true; botao.textContent = 'Enviando…';
+    try {
+      await fetch(ENDPOINT, { method:'POST', mode:'no-cors', headers:{ 'Content-Type':'text/plain;charset=utf-8' }, body: JSON.stringify(montarArquivo(r)) });
+      try { localStorage.removeItem(CHAVE_RASCUNHO); } catch(e) {}
+      $('form').style.display = 'none';
+      $('sucesso').classList.add('ativo');
+      $('sucesso').scrollIntoView({ behavior:'smooth', block:'start' });
+    } catch(e) {
+      mostrarErro('Não foi possível enviar agora. Confira sua conexão e toque em Enviar de novo. Suas respostas continuam salvas neste aparelho.');
+      botao.disabled = false; botao.textContent = 'Enviar para a nutricionista';
+    }
   });
-
-  $('baixarNovamente').addEventListener('click', () => { if(ultimoBlob) baixar(ultimoBlob, ultimoNome); });
   $('form').addEventListener('input', salvarRascunho);
   $('form').addEventListener('change', salvarRascunho);
 
