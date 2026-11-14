@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pré-consulta nutricional</title>
+<style>
+  :root { --bg:#fff7f9; --card:#fff; --ink:#3b1f2a; --muted:#7d5f69; --brand:#b0305a; --accent:#d45a7a; --soft:#e888a0; --blush:#f5b8c8; --brand-2:#fde8ee; --warn:#8a4b00; --bad:#b3261e; --ok:#1e7a3c; --line:#f5b8c8; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family: Arial, Helvetica, sans-serif; background:var(--bg); color:var(--ink); font-size:16px; line-height:1.45; }
+  header { background:linear-gradient(90deg,var(--brand),var(--accent)); color:#fff; padding:18px 16px; }
+  header h1 { margin:0; font-size:20px; }
+  header p { margin:6px 0 0; font-size:14px; opacity:.95; }
+  main { max-width:640px; margin:0 auto; padding:14px; }
+  .aviso { background:var(--brand-2); border-left:4px solid var(--brand); padding:12px 14px; border-radius:8px; font-size:14px; color:var(--muted); margin-bottom:14px; }
+  .secao { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:14px; }
+  .secao h2 { font-size:17px; margin:0 0 12px; color:var(--brand); }
+  .campo { margin-bottom:14px; }
+  .campo > label.rotulo, .campo > .rotulo { display:block; font-weight:bold; margin-bottom:6px; }
+  .obrig { color:var(--bad); }
+  .dica { font-size:13px; color:var(--muted); margin:-2px 0 6px; }
+  input[type=text], input[type=date], input[type=tel], input[type=number], textarea, select {
+    width:100%; padding:11px 12px; font-size:16px; font-family:inherit; border:1px solid var(--soft); border-radius:8px; background:#fff; color:var(--ink);
+  }
+  textarea { min-height:78px; resize:vertical; }
+  .opcoes { display:flex; flex-direction:column; gap:8px; }
+  .opcao { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:#fff; cursor:pointer; }
+  .opcao input { width:20px; height:20px; margin:0; flex:0 0 auto; }
+  .opcao span { flex:1; }
+  .outro { margin-top:8px; }
+  .erro { display:none; background:var(--brand-2); color:var(--bad); border:1px solid var(--soft); border-radius:8px; padding:12px; margin-bottom:14px; font-size:15px; }
+  .erro.ativo { display:block; }
+  .consent { background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
+  .consent label { display:flex; gap:10px; align-items:flex-start; cursor:pointer; font-size:15px; }
+  .consent input { width:22px; height:22px; margin:2px 0 0; flex:0 0 auto; }
+  .btn { display:block; width:100%; padding:15px; font-size:17px; font-weight:bold; background:var(--brand); color:#fff; border:0; border-radius:10px; cursor:pointer; }
+  .btn:disabled { opacity:.6; }
+  .sucesso { display:none; background:#e7f6ec; border:1px solid #b9dfc6; border-radius:12px; padding:16px; margin-top:14px; }
+  .sucesso.ativo { display:block; }
+  .sucesso h2 { margin:0 0 8px; font-size:18px; color:var(--ok); }
+  .sucesso p { margin:6px 0; font-size:15px; }
+  .rodape { font-size:12px; color:var(--muted); text-align:center; margin:18px 0 30px; }
+  @media (min-width:600px) { .opcoes.lado { flex-direction:row; flex-wrap:wrap; } .opcoes.lado .opcao { flex:1 1 45%; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pré-consulta nutricional</h1>
+  <p>Responda com calma antes da consulta. Os campos com * são obrigatórios.</p>
+</header>
+<main>
+  <div class="aviso">
+    Não precisa ter todos os exames à mão: responda o que souber. Suas respostas ficam apenas no seu celular até você enviá-las
+    para a nutricionista. Nada é enviado pela internet automaticamente. Ao final, toque em <b>Gerar arquivo para enviar</b> e envie o arquivo gerado pelo WhatsApp.
+  </div>
+
+  <div class="erro" id="erro" role="alert"></div>
+
+  <form id="form" novalidate>
+    <div id="secoes"></div>
+
+    <div class="consent">
+      <label>
+        <input type="checkbox" id="consentimento" name="consentimento">
+        <span><span class="obrig">*</span> Autorizo a nutricionista responsável a registrar estas informações no meu prontuário, usadas somente para o meu atendimento nutricional, conforme a Lei Geral de Proteção de Dados (LGPD).</span>
+      </label>
+    </div>
+
+    <button class="btn" type="submit" id="gerar">Gerar arquivo para enviar</button>
+  </form>
+
+  <div class="sucesso" id="sucesso" role="status">
+    <h2>Arquivo gerado</h2>
+    <p>Envie o arquivo <b id="nomeArquivo"></b> para a nutricionista pelo WhatsApp, como anexo.</p>
+    <p>Se o arquivo não tiver sido baixado, toque em <b>Baixar novamente</b>.</p>
+    <button class="btn" type="button" id="baixarNovamente" style="margin-top:10px;background:var(--accent)">Baixar novamente</button>
+  </div>
+
+  <p class="rodape">Pré-consulta nutricional. Em caso de dúvida, pergunte à nutricionista antes de enviar.</p>
+</main>
+
+<script>
+(function(){
+  'use strict';
+  const CHAVE_RASCUNHO = 'preconsulta-rascunho-v1';
+
+  /* Perguntas. tipo: texto | data | numero | tel | area | radio | check
+     obrig: campo obrigatório. identificacao: campo usado para localizar o cadastro. */
+  const SECOES = [
+    { titulo:'Sobre você', campos:[
+      { id:'nome', rotulo:'Nome completo', tipo:'texto', obrig:true, ident:true },
+      { id:'nasc', rotulo:'Data de nascimento', tipo:'data', obrig:true, ident:true },
+      { id:'sexo', rotulo:'Sexo', tipo:'radio', obrig:true, ident:true, opcoes:['Feminino','Masculino'], lado:true },
+      { id:'tel', rotulo:'Telefone / WhatsApp', tipo:'tel', ident:true },
+      { id:'peso', rotulo:'Peso atual (kg)', tipo:'numero', passo:'0.1', dica:'Se não souber, deixe em branco.' },
+      { id:'altura', rotulo:'Altura (cm)', tipo:'numero', passo:'1' }
+    ]},
+    { titulo:'Motivo da consulta', campos:[
+      { id:'motivo', rotulo:'O que te trouxe até a consulta?', tipo:'area', obrig:true },
+      { id:'objetivo', rotulo:'Qual é o seu principal objetivo?', tipo:'radio', opcoes:['Emagrecer','Ganhar massa muscular','Melhorar a saúde ou controlar uma doença','Melhorar a alimentação de forma geral','Outro'] },
+      { id:'acompanhamento', rotulo:'Já fez acompanhamento com nutricionista antes?', tipo:'radio', opcoes:['Sim','Não'], lado:true },
+      { id:'acompanhamento_detalhe', rotulo:'Se sim, quando e o que mudou?', tipo:'area' }
+    ]},
+    { titulo:'Saúde', campos:[
+      { id:'condicoes', rotulo:'Você tem ou já teve algum destes diagnósticos?', tipo:'check', opcoes:['Diabetes','Pressão alta','Colesterol ou triglicerídeos altos','Gordura no fígado','Doença renal','Doença da tireoide','Anemia','Doença celíaca','Problemas intestinais (intestino irritável, refluxo, gastrite)','Osteoporose','Nenhum destes'] },
+      { id:'condicoes_outra', rotulo:'Outro diagnóstico', tipo:'texto' },
+      { id:'cirurgias', rotulo:'Cirurgias ou internações recentes', tipo:'area' },
+      { id:'medicamentos', rotulo:'Medicamentos de uso contínuo (nome e dose)', tipo:'area' },
+      { id:'suplementos', rotulo:'Suplementos, vitaminas ou chás que você usa', tipo:'area' },
+      { id:'alergias', rotulo:'Alergias e intolerâncias alimentares', tipo:'area' },
+      { id:'gestacao', rotulo:'Você está grávida ou amamentando?', tipo:'radio', opcoes:['Não','Estou grávida','Estou amamentando'], lado:true },
+      { id:'exames', rotulo:'Exames recentes (tipo e data)', tipo:'area', dica:'Se tiver, pode enviar fotos ou PDFs junto com o arquivo pelo WhatsApp.' }
+    ]},
+    { titulo:'Hábitos', campos:[
+      { id:'intestino', rotulo:'Como está o funcionamento do seu intestino?', tipo:'radio', opcoes:['Normal','Preso (constipado)','Solto (diarreia)','Alterna entre os dois'] },
+      { id:'agua', rotulo:'Quanta água você bebe por dia?', tipo:'radio', opcoes:['Menos de 1 litro','Entre 1 e 2 litros','Mais de 2 litros'] },
+      { id:'sono', rotulo:'Quantas horas você dorme por noite, em média?', tipo:'numero', passo:'0.5' },
+      { id:'atividade', rotulo:'Atividade física', tipo:'area', dica:'Qual atividade, quantas vezes por semana e por quanto tempo.' },
+      { id:'alcool', rotulo:'Consumo de álcool', tipo:'radio', opcoes:['Não consumo','Raramente','Semanalmente','Diariamente'] },
+      { id:'tabaco', rotulo:'Você fuma?', tipo:'radio', opcoes:['Não','Sim','Já fumei'], lado:true },
+      { id:'rotina', rotulo:'Como é sua rotina de trabalho e quem costuma cozinhar em casa?', tipo:'area' }
+    ]},
+    { titulo:'Alimentação', campos:[
+      { id:'refeicoes', rotulo:'Quantas refeições você faz por dia?', tipo:'numero', passo:'1' },
+      { id:'dia_tipico', rotulo:'Descreva um dia típico de alimentação', tipo:'area', dica:'O que come e em que horário, mesmo que de forma resumida.' },
+      { id:'gosta', rotulo:'Alimentos de que você gosta', tipo:'area' },
+      { id:'nao_gosta', rotulo:'Alimentos que você não come ou não gosta', tipo:'area' },
+      { id:'restricoes', rotulo:'Você segue alguma restrição alimentar?', tipo:'check', opcoes:['Vegetariana','Vegana','Sem glúten','Sem lactose','Nenhuma'] },
+      { id:'restricoes_outra', rotulo:'Outra restrição', tipo:'texto' },
+      { id:'fora', rotulo:'Com que frequência você come fora de casa ou pede delivery?', tipo:'radio', opcoes:['Quase nunca','1 a 2 vezes por semana','3 ou mais vezes por semana','Todos os dias'] },
+      { id:'dificuldades', rotulo:'O que mais dificulta você seguir uma alimentação saudável?', tipo:'area' },
+      { id:'controle', rotulo:'Você sente dificuldade para controlar a quantidade de comida ou perde o controle ao comer?', tipo:'radio', opcoes:['Não','Às vezes','Frequentemente'], dica:'Esta informação é confidencial e pode ser conversada pessoalmente, se preferir.' }
+    ]},
+    { titulo:'Últimas 24 horas', campos:[
+      { id:'recordatorio', rotulo:'Se lembrar, conte o que comeu ontem', tipo:'area', dica:'Inclua horários e quantidades aproximadas, se souber. Pode deixar em branco.' }
+    ]},
+    { titulo:'Final', campos:[
+      { id:'outros', rotulo:'Algo mais que você queira contar?', tipo:'area' }
+    ]}
+  ];
+
+  const TODOS = SECOES.flatMap(s => s.campos);
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const nomeSeguro = s => String(s || 'paciente').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^\w]+/g,'_').replace(/^_+|_+$/g,'').slice(0,40) || 'paciente';
+
+  function htmlCampo(c){
+    const rot = `<span class="rotulo">${esc(c.rotulo)}${c.obrig ? ' <span class="obrig">*</span>' : ''}</span>`;
+    const dica = c.dica ? `<div class="dica">${esc(c.dica)}</div>` : '';
+    const nome = `name="${c.id}" id="${c.id}"`;
+    let corpo = '';
+    if(c.tipo === 'texto') corpo = `<input type="text" ${nome} autocomplete="off">`;
+    else if(c.tipo === 'tel') corpo = `<input type="tel" ${nome} autocomplete="tel">`;
+    else if(c.tipo === 'data') corpo = `<input type="date" ${nome}>`;
+    else if(c.tipo === 'numero') corpo = `<input type="number" inputmode="decimal" step="${c.passo || 'any'}" min="0" ${nome}>`;
+    else if(c.tipo === 'area') corpo = `<textarea ${nome}></textarea>`;
+    else if(c.tipo === 'radio' || c.tipo === 'check'){
+      const tipo = c.tipo === 'radio' ? 'radio' : 'checkbox';
+      corpo = `<div class="opcoes${c.lado ? ' lado' : ''}">` + c.opcoes.map((o, i) =>
+        `<label class="opcao"><input type="${tipo}" name="${c.id}" value="${esc(o)}"><span>${esc(o)}</span></label>`).join('') + '</div>';
+    }
+    return `<div class="campo" data-campo="${c.id}">${c.tipo === 'radio' || c.tipo === 'check' ? rot : `<label for="${c.id}" style="display:block">${rot}</label>`}${dica}${corpo}</div>`;
+  }
+
+  function montar(){
+    $('secoes').innerHTML = SECOES.map(s =>
+      `<section class="secao"><h2>${esc(s.titulo)}</h2>${s.campos.map(htmlCampo).join('')}</section>`).join('');
+  }
+
+  function lerValor(c){
+    if(c.tipo === 'radio'){
+      const m = document.querySelector(`input[name="${c.id}"]:checked`);
+      return m ? m.value : '';
+    }
+    if(c.tipo === 'check'){
+      return Array.from(document.querySelectorAll(`input[name="${c.id}"]:checked`)).map(i => i.value).join('; ');
+    }
+    const el = $(c.id);
+    return el ? el.value.trim() : '';
+  }
+
+  function coletar(){
+    const r = {};
+    TODOS.forEach(c => r[c.id] = lerValor(c));
+    return r;
+  }
+
+  function aplicar(r){
+    TODOS.forEach(c => {
+      const val = r[c.id];
+      if(val == null || val === '') return;
+      if(c.tipo === 'radio') {
+        const m = document.querySelector(`input[name="${c.id}"][value="${CSS.escape(val)}"]`);
+        if(m) m.checked = true;
+      } else if(c.tipo === 'check') {
+        String(val).split('; ').forEach(v => {
+          const m = document.querySelector(`input[name="${c.id}"][value="${CSS.escape(v)}"]`);
+          if(m) m.checked = true;
+        });
+      } else {
+        const el = $(c.id); if(el) el.value = val;
+      }
+    });
+    if(r.consentimento) $('consentimento').checked = true;
+  }
+
+  /* rascunho: salvo só no navegador do celular, nunca enviado */
+  let salvoTimer = null;
+  function salvarRascunho(){
+    clearTimeout(salvoTimer);
+    salvoTimer = setTimeout(() => {
+      try { localStorage.setItem(CHAVE_RASCUNHO, JSON.stringify({ r: coletar(), consent: $('consentimento').checked })); } catch(e) {}
+    }, 300);
+  }
+  function carregarRascunho(){
+    try {
+      const x = JSON.parse(localStorage.getItem(CHAVE_RASCUNHO) || 'null');
+      if(x && x.r){ aplicar(Object.assign({}, x.r, { consentimento: x.consent })); }
+    } catch(e) {}
+  }
+
+  function mostrarErro(msg){
+    const e = $('erro'); e.textContent = msg; e.classList.add('ativo');
+    e.scrollIntoView({ block:'start' });
+  }
+  function limparErro(){ $('erro').classList.remove('ativo'); }
+
+  function validar(r){
+    const faltando = TODOS.filter(c => c.obrig && !r[c.id]);
+    if(faltando.length) return 'Preencha os campos obrigatórios: ' + faltando.map(c => c.rotulo).join(', ') + '.';
+    if(!$('consentimento').checked) return 'Marque a autorização para continuar.';
+    const nasc = new Date(r.nasc);
+    if(isNaN(nasc) || nasc > new Date()) return 'Confira a data de nascimento.';
+    return null;
+  }
+
+  function montarArquivo(r){
+    const respostas = TODOS.filter(c => r[c.id] !== '').map(c => ({ id: c.id, pergunta: c.rotulo, resposta: r[c.id] }));
+    return {
+      tipo: 'pre-consulta-consultorio',
+      versao: 1,
+      enviadoEm: new Date().toISOString(),
+      identificacao: { nome: r.nome, nasc: r.nasc, sexo: r.sexo, tel: r.tel },
+      respostas
+    };
+  }
+
+  let ultimoBlob = null, ultimoNome = '';
+  function baixar(blob, nome){
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = nome;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+
+  $('form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    limparErro();
+    const r = coletar();
+    r.consentimento = $('consentimento').checked;
+    const erro = validar(r);
+    if(erro){ mostrarErro(erro); return; }
+
+    const arquivo = montarArquivo(r);
+    ultimoNome = 'pre-consulta_' + nomeSeguro(r.nome) + '_' + new Date().toISOString().slice(0,10) + '.json';
+    ultimoBlob = new Blob([JSON.stringify(arquivo, null, 2)], { type: 'application/json' });
+    $('nomeArquivo').textContent = ultimoNome;
+    $('sucesso').classList.add('ativo');
+    $('sucesso').scrollIntoView({ behavior:'smooth', block:'start' });
+    baixar(ultimoBlob, ultimoNome);
+  });
+
+  $('baixarNovamente').addEventListener('click', () => { if(ultimoBlob) baixar(ultimoBlob, ultimoNome); });
+  $('form').addEventListener('input', salvarRascunho);
+  $('form').addEventListener('change', salvarRascunho);
+
+  montar();
+  carregarRascunho();
+})();
+</script>
+</body>
+</html>

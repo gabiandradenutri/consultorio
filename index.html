@@ -99,11 +99,14 @@ th{font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
     <button data-tab="agenda">Agenda</button>
     <button data-tab="antropometria">Antropometria</button>
     <button data-tab="energia">Energia</button>
+    <button data-tab="consumo">Consumo</button>
     <button data-tab="prontuario">Prontuário</button>
     <button data-tab="exames">Exames</button>
     <button data-tab="fotos">Fotos</button>
     <button data-tab="prescricao">Prescrição</button>
     <button data-tab="alimentos">Alimentos</button>
+    <button data-tab="financeiro">Financeiro</button>
+    <button data-tab="documentos">Documentos</button>
     <button data-tab="backup">Backup</button>
   </nav>
 </header>
@@ -119,11 +122,14 @@ th{font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
   <section id="tab-agenda" class="hide"></section>
   <section id="tab-antropometria" class="hide"></section>
   <section id="tab-energia" class="hide"></section>
+  <section id="tab-consumo" class="hide"></section>
   <section id="tab-prontuario" class="hide"></section>
   <section id="tab-exames" class="hide"></section>
   <section id="tab-fotos" class="hide"></section>
   <section id="tab-prescricao" class="hide"></section>
   <section id="tab-alimentos" class="hide"></section>
+  <section id="tab-financeiro" class="hide"></section>
+  <section id="tab-documentos" class="hide"></section>
   <section id="tab-backup" class="hide"></section>
 </main>
 <div id="printArea" class="pl"></div>
@@ -157,8 +163,8 @@ function rotulo(a){ return a.nome + '  ·  ' + a.src + ' ' + a.cod; }
 
 /* ---------- armazenamento ---------- */
 function carregar(){
-  try { const x = JSON.parse(localStorage.getItem(KEY)); if(x && Array.isArray(x.pacientes)){ x.extras = x.extras || []; x.agenda = x.agenda || []; return x; } } catch(e){}
-  return { pacientes:[], extras:[], agenda:[], ativo:null };
+  try { const x = JSON.parse(localStorage.getItem(KEY)); if(x && Array.isArray(x.pacientes)){ x.extras = x.extras || []; x.agenda = x.agenda || []; x.espera = x.espera || []; x.financeiro = x.financeiro || {}; return x; } } catch(e){}
+  return { pacientes:[], extras:[], agenda:[], espera:[], financeiro:{}, ativo:null };
 }
 function salvar(){
   try { localStorage.setItem(KEY, JSON.stringify(DB)); }
@@ -234,6 +240,13 @@ function nuvemDrive(mcp){
       for(const id of ids) await chamar('trash_file', { fileId: id });
       atuais.clear();
     },
+    async criarDocumento(titulo, texto){
+      const pasta = await pastaId();
+      const r = await chamar('create_file', { title: titulo, parentId: pasta, textContent: texto,
+        contentMimeType: 'application/vnd.google-apps.document', disableConversionToGoogleType: false });
+      return (r.payload || {}).id;
+    },
+    async apagarDocumento(id){ if(id) await chamar('trash_file', { fileId: id }); },
     collection(nome){
       const pre = PRE + nome + '__';
       return {
@@ -271,7 +284,7 @@ async function decifrar(env){
   const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv: unb64(env.iv) }, CHAVE, unb64(env.ct));
   return JSON.parse(TD.decode(pt));
 }
-/* cada documento da nuvem: pacientes/<id>, fotos/<id>, agenda/<id>, config/extras */
+/* cada documento da nuvem: pacientes/<id>, fotos/<id>, agenda/todos, config/extras, financeiro/todos */
 function mapaLocal(){
   const m = new Map();
   for(const p of DB.pacientes){
@@ -279,8 +292,9 @@ function mapaLocal(){
     m.set('pacientes/' + p.id, resto);
     for(const f of (fotos || [])) m.set('fotos/' + f.id, Object.assign({ pacienteId: p.id }, f));
   }
-  m.set('agenda/todos', { itens: agList() });
-  m.set('config/extras', { extras: DB.extras || [] });
+  m.set('agenda/todos', { itens: agList(), espera: esperaList() });
+  m.set('config/extras', { extras: DB.extras || [], receitas: DB.receitas || [] });
+  m.set('financeiro/todos', finDados());
   return m;
 }
 async function hashesDe(m){ const h = {}; for(const [k, v] of m) h[k] = await hashDe(JSON.stringify(v)); return h; }
@@ -325,15 +339,20 @@ function setSync(estado, msg){
   }[estado] || '';
 }
 async function lerNuvem(){
-  const [pacs, fots, cfg, ag] = await Promise.all([
+  const [pacs, fots, cfg, ag, fin] = await Promise.all([
     NUVEM.collection('pacientes').get(), NUVEM.collection('fotos').get(),
-    NUVEM.doc('config/extras').get(), NUVEM.doc('agenda/todos').get() ]);
+    NUVEM.doc('config/extras').get(), NUVEM.doc('agenda/todos').get(), NUVEM.doc('financeiro/todos').get() ]);
   const abrir = async snap => { const out = []; for(const d of snap.docs){ if(d.exists) out.push(await decifrar(d.data())); } return out; };
   const pacientes = await abrir(pacs), fotos = await abrir(fots);
-  const agenda = ag.exists ? ((await decifrar(ag.data())).itens || []) : [];
-  const extras = cfg.exists ? ((await decifrar(cfg.data())).extras || []) : [];
+  const docAg = ag.exists ? await decifrar(ag.data()) : {};
+  const agenda = docAg.itens || [];
+  const espera = docAg.espera || [];
+  const cfgDoc = cfg.exists ? await decifrar(cfg.data()) : {};
+  const extras = cfgDoc.extras || [];
+  const receitas = cfgDoc.receitas || [];
+  const financeiro = fin.exists ? await decifrar(fin.data()) : null;
   for(const p of pacientes) p.fotos = fotos.filter(f => f.pacienteId === p.id).map(({ pacienteId, ...f }) => f);
-  return { pacientes, agenda, extras };
+  return { pacientes, agenda, extras, financeiro, espera, receitas };
 }
 async function enviarMudancas(){
   const m = mapaLocal();
@@ -361,7 +380,20 @@ async function primeiraSincronizacao(){
   }
   const aids = new Set(agList().map(a => a.id));
   DB.agenda = agList().concat(nuvem.agenda.filter(a => !aids.has(a.id)));
+  const eids = new Set(esperaList().map(e => e.id));
+  DB.espera = esperaList().concat((nuvem.espera || []).filter(e => !eids.has(e.id)));
   if(!(DB.extras || []).length) DB.extras = nuvem.extras;
+  { const ids = new Set(receitasDB().map(r => r.id)); DB.receitas = receitasDB().concat((nuvem.receitas || []).filter(r => !ids.has(r.id))); }
+  if(nuvem.financeiro){
+    const fin = finDados(), nf = nuvem.financeiro;
+    fin.profissional = fin.profissional || nf.profissional || '';
+    fin.registro = fin.registro || nf.registro || '';
+    fin.documento = fin.documento || nf.documento || '';
+    fin.valorPadrao = fin.valorPadrao || Number(nf.valorPadrao) || 0;
+    const uniao = (loc, rem) => { const ids = new Set(loc.map(x => x.id)); return loc.concat((rem || []).filter(x => !ids.has(x.id))); };
+    fin.pacotes = uniao(fin.pacotes, nf.pacotes);
+    fin.pagamentos = uniao(fin.pagamentos, nf.pagamentos);
+  }
   gravarLocal();
   ULTIMO = {}; gravarSync();
   await enviarMudancas();
@@ -378,7 +410,8 @@ async function sincronizar(puxar){
       await enviarMudancas();
       if(puxar){
         const nuvem = await lerNuvem();
-        DB.pacientes = nuvem.pacientes; DB.agenda = nuvem.agenda; DB.extras = nuvem.extras;
+        DB.pacientes = nuvem.pacientes; DB.agenda = nuvem.agenda; DB.extras = nuvem.extras; DB.espera = nuvem.espera || []; DB.receitas = nuvem.receitas || []; montarAlimentos();
+        if(nuvem.financeiro) DB.financeiro = nuvem.financeiro; finDados();
         gravarLocal(); mudouDoNuvem = true;
         ULTIMO = await hashesDe(mapaLocal()); gravarSync();
       }
@@ -497,7 +530,7 @@ function mcpDireto(){
           const j = await (await api(API + '?fields=id', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(meta) })).json();
           return { payload: { id: j.id } };
         }
-        meta.mimeType = 'text/plain';
+        meta.mimeType = input.contentMimeType === 'application/vnd.google-apps.document' ? 'application/vnd.google-apps.document' : 'text/plain';
         const b = 'b' + Math.random().toString(36).slice(2) + Date.now();
         const corpo = `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${b}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n${input.textContent}\r\n--${b}--`;
         const j = await (await api('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
@@ -541,7 +574,8 @@ async function iniciarSync(){
 /* ---------- base de alimentos ---------- */
 function montarAlimentos(){
   const base = TACO.map(a => ({ key:'TACO:'+a.id, src:'TACO', cod:String(a.id), nome:a.nome, k:a.kcal, p:a.proteina, l:a.lipideos, c:a.carboidrato, f:a.fibra, col:a.colesterol, ca:a.calcio, mg:a.magnesio }));
-  ALIM = base.concat(DB.extras);
+  MAPA = new Map(base.concat(DB.extras).map(a => [a.key, a]));   // base antes, para calcular as preparações
+  ALIM = base.concat(DB.extras, receitasAlim());
   MAPA = new Map(ALIM.map(a => [a.key, a]));
   ROTULO = new Map(ALIM.map(a => [rotulo(a), a.key]));
   document.getElementById('dl-alim').innerHTML = ALIM.map(a => `<option value="${esc(rotulo(a))}"></option>`).join('');
@@ -633,6 +667,10 @@ function rPacientes(){
   const el = document.getElementById('tab-pacientes'), p = pac();
   const lista = DB.pacientes.slice().sort((a,b) => a.nome.localeCompare(b.nome, 'pt-BR'));
   el.innerHTML = `
+  <div class="card"><h2>Receber pré-consulta</h2>
+     <p class="muted">Abra o arquivo .json que o paciente enviou pelo WhatsApp. O cadastro é localizado pelo nome e pela data de nascimento; se não existir, é criado.</p>
+     <input type="file" accept=".json,application/json" onchange="importarPreConsulta(this)">
+     <div id="preStatus" style="margin-top:8px"></div></div>
   ${p ? `<div class="card"><h2>Dados do paciente ativo</h2>${formPaciente(p,'ed')}
      <div style="margin-top:10px"><button class="btn" onclick="salvarPaciente('${p.id}')">Salvar alterações</button></div></div>` : ''}
   <div class="card"><h2>Novo paciente</h2>${formPaciente(null,'np')}
@@ -642,6 +680,120 @@ function rPacientes(){
     ${lista.map(x => `<tr><td><b>${esc(x.nome)}</b>${x.id===DB.ativo?' <span class="tag">ativo</span>':''}</td><td>${x.sexo==='M'?'Masculino':'Feminino'}</td><td>${idadeEm(x.nasc) ?? '—'}</td><td>${esc(x.tel||'')}</td><td class="num">${(x.antro||[]).length}</td><td class="num">${(x.presc||[]).length}</td><td style="white-space:nowrap"><button class="btn sec mini" onclick="ativar('${x.id}')">Ativar</button> <button class="btn danger mini" onclick="excluirPaciente('${x.id}')">Excluir</button></td></tr>`).join('')}
     </tbody></table></div>` : '<div class="empty">Nenhum paciente cadastrado ainda.</div>'}
   </div>`;
+}
+
+/* ---------- pré-consulta enviada pelo paciente (arquivo .json do formulário pre_consulta.html) ---------- */
+const PRE_ROTULOS = { condicoes:'Diagnósticos', condicoes_outra:'Outro diagnóstico', cirurgias:'Cirurgias ou internações', medicamentos:'Medicamentos', suplementos:'Suplementos e chás', alergias:'Alergias e intolerâncias', restricoes:'Restrições alimentares', dia_tipico:'Dia típico', fora:'Come fora ou delivery', atividade:'Atividade física', sono:'Sono (horas/noite)', alcool:'Álcool', tabaco:'Tabaco' };
+const PRE_FICHA = [
+  ['fQueixa', ['motivo']],
+  ['fHist', ['condicoes','condicoes_outra','cirurgias']],
+  ['fMed', ['medicamentos','suplementos']],
+  ['fAlerg', ['alergias','restricoes']],
+  ['fHab', ['dia_tipico','fora']],
+  ['fAtiv', ['atividade','sono','alcool','tabaco']],
+  ['fExam', ['exames']]
+];
+function preStatus(msg, ok){
+  const el = document.getElementById('preStatus');
+  if(el){ el.textContent = msg; el.style.color = ok ? 'var(--brand)' : 'var(--bad)'; }
+}
+function importarPreConsulta(input){
+  const file = input.files && input.files[0];
+  input.value = '';
+  if(!file) return;
+  file.text().then(async txt => {
+    let x = null;
+    try { x = JSON.parse(txt); } catch(e) { preStatus('Não foi possível ler o arquivo (JSON inválido).', false); return; }
+    if(!x || x.tipo !== 'pre-consulta-consultorio' || x.versao !== 1 || !Array.isArray(x.respostas)){
+      preStatus('Este arquivo não é uma pré-consulta reconhecida.', false); return;
+    }
+    const r = {};
+    x.respostas.forEach(a => { if(a && a.id) r[a.id] = String(a.resposta || ''); });
+    const ident = x.identificacao || {};
+    const nome = String(r.nome || ident.nome || '').trim();
+    const nasc = r.nasc || ident.nasc || '';
+    if(!nome){ preStatus('A pré-consulta não traz o nome do paciente.', false); return; }
+    const existente = DB.pacientes.find(q => norm(q.nome) === norm(nome) && (q.nasc || '') === nasc);
+    const pc = { recebidoEm: new Date().toISOString(), enviadoEm: x.enviadoEm || '', r, respostas: x.respostas };
+    let p = existente;
+    const docAnterior = p && p.preconsulta && p.preconsulta.docId;
+    if(!p){
+      p = Object.assign({ id:uid(), antro:[], evol:[], presc:[], ficha:{} },
+        { nome, sexo: (r.sexo || ident.sexo) === 'Masculino' ? 'M' : 'F', nasc, tel: r.tel || ident.tel || '',
+          cpf:'', estCiv:'', prof:'', email:'', endereco:'', emergNome:'', emergTel:'', convenio:'', encaminhadoPor:'', objetivo:'', obs:'' });
+      DB.pacientes.push(p);
+    }
+    p.preconsulta = pc;
+    DB.ativo = p.id; PRESC_ID = null;
+    salvar();
+    const doc = await criarDocPreConsulta(p, docAnterior);
+    if(doc.id){ p.preconsulta.docId = doc.id; p.preconsulta.docTitulo = doc.titulo; }
+    salvar(); TAB = 'prontuario'; render();
+    if(doc.erro) alert(doc.erro + ' A pré-consulta foi salva no app.');
+  }).catch(() => preStatus('Não foi possível abrir o arquivo.', false));
+}
+async function criarDocPreConsulta(p, docAnterior){
+  if(!NUVEM) return { erro: 'Conecte o Google Drive para gerar o documento da pré-consulta.' };
+  const pc = p.preconsulta;
+  const cab = [
+    'Pré-consulta nutricional', '',
+    'Paciente: ' + p.nome,
+    'Sexo: ' + (p.sexo === 'M' ? 'Masculino' : 'Feminino'),
+    'Data de nascimento: ' + (p.nasc ? fmtData(p.nasc) : '—'),
+    'Telefone: ' + (p.tel || '—'),
+    'Recebida em: ' + fmtData(pc.recebidoEm.slice(0,10)),
+    pc.enviadoEm ? 'Enviada pelo paciente em: ' + fmtData(pc.enviadoEm.slice(0,10)) : ''
+  ].filter(x => x !== '');
+  const respostas = (pc.respostas || []).map(a => a.pergunta + '\n' + (a.resposta || '—')).join('\n\n');
+  const texto = cab.join('\n') + '\n\nRespostas\n\n' + respostas + '\n';
+  const titulo = 'Pré-consulta · ' + p.nome;
+  try {
+    if(docAnterior) await NUVEM.apagarDocumento(docAnterior);
+    const id = await NUVEM.criarDocumento(titulo, texto);
+    return { id, titulo };
+  } catch(e){ return { erro: 'Não foi possível criar o documento no Drive: ' + msgErro(e) + '.' }; }
+}
+function preCard(p){
+  const pc = p.preconsulta;
+  if(!pc) return '';
+  const data = pc.recebidoEm ? fmtData(pc.recebidoEm.slice(0,10)) : '';
+  const enviado = pc.enviadoEm ? ' · enviada pelo paciente em ' + fmtData(pc.enviadoEm.slice(0,10)) : '';
+  return `<div class="card"><h2>Pré-consulta recebida</h2>
+    <div class="muted">Recebida em ${data}${enviado}</div>
+    ${pc.docId ? `<div class="muted">Documento no Drive: <a href="https://docs.google.com/document/d/${esc(pc.docId)}/edit" target="_blank" rel="noopener">${esc(pc.docTitulo || 'abrir')}</a></div>` : ''}
+    <div style="margin:10px 0;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sec mini" onclick="aplicarPreConsulta()">Preencher campos vazios da ficha</button><button class="btn danger mini" onclick="excluirPreConsulta()">Excluir pré-consulta</button></div>
+    ${(pc.respostas || []).map(a => `<div style="border-top:1px solid var(--line);padding:8px 0"><b>${esc(a.pergunta)}</b><div style="white-space:pre-wrap">${esc(a.resposta)}</div></div>`).join('')}
+  </div>`;
+}
+function aplicarPreConsulta(){
+  const p = pac();
+  if(!p || !p.preconsulta) return;
+  const r = p.preconsulta.r || {};
+  p.ficha = p.ficha || {};
+  let n = 0;
+  PRE_FICHA.forEach(([campo, ids]) => {
+    if(String(p.ficha[campo] || '').trim()) return;
+    const linhas = ids.map(id => {
+      const val = String(r[id] || '').trim();
+      if(!val) return '';
+      return PRE_ROTULOS[id] ? PRE_ROTULOS[id] + ': ' + val : val;
+    }).filter(Boolean);
+    if(linhas.length){ p.ficha[campo] = linhas.join('\n'); n++; }
+  });
+  salvar(); render();
+  alert(n ? `Ficha preenchida em ${n} campo(s) que estavam vazios.` : 'Nenhum campo vazio para preencher na ficha.');
+}
+async function excluirPreConsulta(){
+  const p = pac();
+  if(!p || !p.preconsulta) return;
+  if(!confirm('Excluir a pré-consulta recebida deste paciente? O documento no Drive também será movido para a lixeira.')) return;
+  const docId = p.preconsulta.docId;
+  delete p.preconsulta;
+  salvar(); render();
+  if(docId && NUVEM){
+    try { await NUVEM.apagarDocumento(docId); }
+    catch(e){ alert('Não foi possível mover o documento do Drive para a lixeira. Apague-o manualmente.'); }
+  }
 }
 
 /* ---------- antropometria: 7 dobras (Jackson & Pollock) + Siri ---------- */
@@ -667,6 +819,22 @@ function densidadeJP7(d, idade, hom){
     : 1.097 - 0.00046971*s + 0.00000056*s*s - 0.00012828*idade;
   return { soma:s, db };
 }
+/* Classificação da composição corporal.
+   Gordura (%G): categorias ACSM (base Lohman), sexo masculino / feminino.
+   Massa magra: índice de massa livre de gordura (IMLG, kg/m²) com limite de baixa massa magra da ESPEN (Cederholm et al., 2015): homens < 17, mulheres < 15. */
+function classGordura(gc, hom){
+  const ates = hom ? [[5,'Essencial'],[13,'Atleta'],[17,'Fitness'],[24,'Aceitável']]
+                   : [[13,'Essencial'],[20,'Atleta'],[24,'Fitness'],[31,'Aceitável']];
+  const minimo = hom ? 2 : 10, obesidade = hom ? 25 : 32;
+  if(gc >= obesidade) return ['Obesidade', 'bad'];
+  if(gc < minimo) return ['Abaixo do essencial', 'bad'];
+  const c = ates.find(([hi]) => gc <= hi) || ates[ates.length - 1];
+  return [c[1], 'ok'];
+}
+function classMassaMagra(ffmi, hom){
+  const minimo = hom ? 17 : 15;
+  return ffmi < minimo ? ['Baixa (IMLG < ' + minimo + ')', 'bad'] : ['Adequada', 'ok'];
+}
 function calcAntro(a, p){
   const alt = a.altura / 100, imc = a.peso / (alt*alt);
   const idade = idadeEm(p.nasc, a.data), hom = p.sexo === 'M';
@@ -687,7 +855,10 @@ function calcAntro(a, p){
     mg = a.peso * gc / 100;
     mm = a.peso - mg;
   }
-  return { imc, cls, cor, idade, rcq, rcqCls, cintCls, pesoIdeal:22*alt*alt, jp, gc, mg, mm, aviso };
+  const gcCls = gc == null ? null : classGordura(gc, hom);
+  const ffmi = mm == null ? null : mm / (alt*alt);
+  const mmCls = ffmi == null ? null : classMassaMagra(ffmi, hom);
+  return { imc, cls, cor, idade, rcq, rcqCls, cintCls, pesoIdeal:22*alt*alt, jp, gc, mg, mm, aviso, gcCls, ffmi, mmCls };
 }
 function novaAntro(){
   const p = pac(), peso = num(v('aPeso')), altura = num(v('aAlt'));
@@ -714,13 +885,13 @@ function rAntro(){
     <div class="kpis">
      <div class="kpi"><span>IMC (kg/m²)</span><b>${fmt(c.imc)}</b><span class="tag ${c.cor}">${c.cls}</span></div>
      <div class="kpi"><span>Gordura corporal (Siri)</span><b>${c.gc == null ? '—' : fmt(c.gc)+'%'}</b><span>Σ7 dobras: ${c.jp ? fmt(c.jp.soma,0)+' mm' : '—'}</span></div>
-     <div class="kpi"><span>Massa gorda</span><b>${c.mg == null ? '—' : fmt(c.mg)+' kg'}</b></div>
-     <div class="kpi"><span>Massa magra</span><b>${c.mm == null ? '—' : fmt(c.mm)+' kg'}</b></div>
+     <div class="kpi"><span>Massa gorda</span><b>${c.mg == null ? '—' : fmt(c.mg)+' kg'}</b>${c.gcCls ? `<span class="tag ${c.gcCls[1]}">${c.gcCls[0]}</span>` : ''}</div>
+     <div class="kpi"><span>Massa magra</span><b>${c.mm == null ? '—' : fmt(c.mm)+' kg'}</b>${c.mmCls ? `<span class="tag ${c.mmCls[1]}">${c.mmCls[0]}</span><span>IMLG ${fmt(c.ffmi)} kg/m²</span>` : ''}</div>
      <div class="kpi"><span>Peso atual / ideal (IMC 22)</span><b>${fmt(ult.peso)} kg</b><span>ideal: ${fmt(c.pesoIdeal)} kg</span></div>
      <div class="kpi"><span>Cintura · RCQ</span><b>${ult.cintura == null ? '—' : fmt(ult.cintura,0)+' cm'}</b><span class="tag ${tagCls(c.cintCls)}">${c.cintCls}</span><span class="tag ${tagCls(c.rcqCls)}">RCQ ${fmt(c.rcq,2)}</span></div>
     </div></div>` : '';
   const dobraInputs = DOBRAS.map(([k,l]) => `<label>${l} (mm)<input id="dob_${k}" inputmode="decimal"></label>`).join('');
-  el.innerHTML = `${kpi}
+  el.innerHTML = `${kpi}${graficoEvolucao(p)}
   <div class="card"><h2>Nova avaliação · ${esc(p.nome)}</h2>
     <div class="grid">
       <label>Data<input type="date" id="aData" value="${hoje()}"></label>
@@ -741,14 +912,16 @@ function rAntro(){
   ${lista.length ? `<div style="overflow-x:auto"><table><thead><tr>
      <th>Data</th><th class="num">Idade</th><th class="num">Peso (kg)</th><th class="num">IMC</th><th>Classificação IMC</th>
      <th class="num">Σ7 dobras (mm)</th><th class="num">%G</th><th class="num">Massa gorda (kg)</th><th class="num">Massa magra (kg)</th>
+     <th>Classificação gordura</th><th>Classificação massa magra</th>
      <th class="num">Cintura (cm)</th><th class="num">RCQ</th><th class="num">Variação peso</th><th></th></tr></thead><tbody>
      ${lista.map(a => { const x = calcAntro(a, p); const va = (a !== primeira && primeira.peso) ? (a.peso - primeira.peso) / primeira.peso * 100 : null;
        return `<tr><td>${fmtData(a.data)}</td><td class="num">${x.idade ?? '—'}</td><td class="num">${fmt(a.peso)}</td><td class="num">${fmt(x.imc)}</td><td><span class="tag ${x.cor}">${x.cls}</span></td>
        <td class="num">${x.jp ? fmt(x.jp.soma,0) : '—'}</td><td class="num">${x.gc == null ? '—' : fmt(x.gc)}</td><td class="num">${fmt(x.mg)}</td><td class="num">${fmt(x.mm)}</td>
+       <td>${x.gcCls ? `<span class="tag ${x.gcCls[1]}">${x.gcCls[0]}</span>` : '—'}</td><td>${x.mmCls ? `<span class="tag ${x.mmCls[1]}">${x.mmCls[0]}</span>` : '—'}</td>
        <td class="num">${fmt(a.cintura,0)}</td><td class="num">${fmt(x.rcq,2)}</td><td class="num">${va == null ? '—' : (va>0?'+':'') + fmt(va) + '%'}</td>
        <td><button class="btn danger mini" onclick="excluirAntro('${a.id}')">×</button></td></tr>`; }).join('')}
      </tbody></table></div>
-     <p class="muted" style="font-size:12px;margin-top:8px">%G: equação de Jackson &amp; Pollock (7 dobras, 1978) com densidade convertida por Siri (1961). Classificação do IMC: OMS (adultos) e critérios OPAS/Lipschitz para ≥60 anos. Cintura e RCQ: OMS. Variação em relação à primeira avaliação.</p>`
+     <p class="muted" style="font-size:12px;margin-top:8px">%G: equação de Jackson &amp; Pollock (7 dobras, 1978) com densidade convertida por Siri (1961). Classificação do IMC: OMS (adultos) e critérios OPAS/Lipschitz para ≥60 anos. Cintura e RCQ: OMS. Gordura corporal: categorias ACSM (base Lohman). Massa magra: IMLG (massa livre de gordura ÷ altura²), com limite de baixa massa magra da ESPEN (homens &lt; 17, mulheres &lt; 15 kg/m²). Variação em relação à primeira avaliação.</p>`
      : '<div class="empty">Nenhuma avaliação registrada.</div>'}
   </div>`;
 }
@@ -762,9 +935,17 @@ function salvarFicha(){
   document.getElementById('fSalvo').textContent = 'Salvo às ' + new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
 }
 function novaEvol(){
-  const p = pac(), texto = v('eTexto'), diag = v('eDiag'), objetivo = v('eObjetivo');
+  const p = pac(), texto = v('eTexto'), diag = v('eDiag'), objetivo = v('eObjetivo'), cidTxt = v('eCid');
   if(!texto && !diag && !objetivo){ alert('Preencha ao menos o objetivo, o diagnóstico ou a evolução.'); return; }
-  p.evol = (p.evol || []).concat([{ id:uid(), data:v('eData') || hoje(), tipo:v('eTipo'), objetivo, diag, texto }]);
+  let cid = null, cidNome = '';
+  if(cidTxt){
+    const code = cidTxt.split('·')[0].trim().toUpperCase();
+    if(!/^[A-Z][0-9]{2}(\.[0-9A-Z]{1,2})?$/.test(code)){ alert('CID inválido. Use o formato da CID-10, por exemplo E66.0.'); return; }
+    cid = code; const hit = CID_LISTA.find(c => c[0] === code); cidNome = hit ? hit[1] : '';
+  }
+  const reg = { id:uid(), data:v('eData') || hoje(), tipo:v('eTipo'), objetivo, diag, texto };
+  if(cid){ reg.cid = cid; reg.cidNome = cidNome; }
+  p.evol = (p.evol || []).concat([reg]);
   salvar(); render();
 }
 function excluirEvol(id){ if(!confirm('Excluir este registro?')) return; const p = pac(); p.evol = p.evol.filter(e => e.id !== id); salvar(); render(); }
@@ -775,7 +956,9 @@ function rPront(){
   const ta = (id, label, val) => `<label>${label}<textarea id="${id}">${esc(val || '')}</textarea></label>`;
   const evol = (p.evol || []).slice().sort((a,b) => a.data < b.data ? 1 : -1);
   el.innerHTML = `
+  ${preCard(p)}
   <div class="card"><h2>Ficha clínica · ${esc(p.nome)}</h2>
+    <div class="row" style="align-items:flex-end;margin-bottom:10px"><label style="flex:0 1 280px">Modelo de anamnese<select id="fModelo">${Object.entries(MODELOS_ANAM).map(([k, m]) => `<option value="${k}">${m.nome}</option>`).join('')}</select></label><button class="btn sec mini" onclick="aplicarModelo()">Preencher campos vazios</button></div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
       ${ta('fQueixa','Queixa principal', f.queixa)}
       ${ta('fHist','História clínica e doenças prévias', f.hist)}
@@ -794,10 +977,12 @@ function rPront(){
       <label style="grid-column:span 2">Objetivo desta consulta<input id="eObjetivo" placeholder="Ex.: reduzir 2 kg em 1 mês; aumentar fibras; ajustar proteína"></label>
     </div>
     <label style="margin-top:10px">Diagnóstico nutricional (formato PES)<input id="eDiag" placeholder="Problema relacionado a etiologia, evidenciado por sinais/sintomas"></label>
+    <label style="margin-top:10px">CID-10 (opcional)<input list="dl-cid" id="eCid" placeholder="Ex.: E66.0 · Obesidade devida a excesso de calorias"></label>
+    <datalist id="dl-cid">${cidOpcoes()}</datalist>
     <label style="margin-top:10px">Evolução e conduta<textarea id="eTexto"></textarea></label>
     <div style="margin-top:10px"><button class="btn" onclick="novaEvol()">Registrar consulta</button></div>
     <div style="margin-top:16px">${evol.length ? evol.map(e => `<div style="border-top:1px solid var(--line);padding:10px 0">
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b>${fmtData(e.data)}</b>${e.tipo ? `<span class="tag">${esc(e.tipo)}</span>` : ''}${e.diag ? `<span class="tag warn">${esc(e.diag)}</span>` : ''}
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b>${fmtData(e.data)}</b>${e.tipo ? `<span class="tag">${esc(e.tipo)}</span>` : ''}${e.diag ? `<span class="tag warn">${esc(e.diag)}</span>` : ''}${e.cid ? `<span class="tag">CID ${esc(e.cid)}</span>` : ''}
       <button class="btn danger mini" style="margin-left:auto" onclick="excluirEvol('${e.id}')">Excluir</button></div>
       ${e.objetivo ? `<div style="margin-top:6px"><b>Objetivo:</b> ${esc(e.objetivo)}</div>` : ''}
       <div style="white-space:pre-wrap;margin-top:6px">${esc(e.texto)}</div></div>`).join('') : '<div class="empty">Nenhuma consulta registrada.</div>'}</div>
@@ -826,6 +1011,9 @@ const ATALHOS = [
   { t:'Exames laboratoriais', s:'Resultados, faixa e variação', f: () => irPara('exames') },
   { t:'Comparar fotos', s:'Antes e depois', f: () => irPara('fotos') },
   { t:'Consultar alimentos', s:'Base TACO e itens TBCA', f: () => irPara('alimentos') },
+  { t:'Financeiro', s:'Pagamentos, pendências e recibos', f: () => irPara('financeiro') },
+  { t:'Consumo alimentar', s:'Recordatório 24 h e frequência alimentar', f: () => irPara('consumo') },
+  { t:'Documentos', s:'Recibo, declaração, atestado e termo', f: () => irPara('documentos') },
   { t:'Backup dos dados', s:'Exportar ou importar', f: () => irPara('backup') }
 ];
 function abrirPacienteHome(id){ DB.ativo = id; PRESC_ID = null; salvar(); irPara('prontuario'); }
@@ -833,8 +1021,8 @@ function rInicio(){
   const el = document.getElementById('tab-inicio');
   const hj = hoje(), ini = segundaDe(hj), fim = dataSomar(ini, 6);
   const pacs = DB.pacientes.slice().sort((a,b) => a.nome.localeCompare(b.nome,'pt-BR'));
-  const agHoje = agList().filter(a => a.data === hj && a.status !== 'Cancelado').sort((a,b) => a.hora < b.hora ? -1 : 1);
-  const agSemana = agList().filter(a => a.data >= ini && a.data <= fim && a.status !== 'Cancelado').length;
+  const agHoje = consultasAg().filter(a => a.data === hj && a.status !== 'Cancelado').sort((a,b) => a.hora < b.hora ? -1 : 1);
+  const agSemana = consultasAg().filter(a => a.data >= ini && a.data <= fim && a.status !== 'Cancelado').length;
   const consultas = pacs.reduce((s,p) => s + (p.evol || []).length, 0);
   const prescricoes = pacs.reduce((s,p) => s + (p.presc || []).length, 0);
   const mesAtual = hj.slice(5,7);
@@ -928,13 +1116,17 @@ const STATUS_AG = ['Agendado','Confirmado','Realizado','Faltou','Cancelado'];
 const DURACOES = [30,45,60,90,120];
 const DIAS_SEMANA = ['Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado'];
 let AG_INICIO = null; // segunda-feira da semana exibida (AAAA-MM-DD)
+let LEM_DATA = null;  // dia exibido em Lembretes (null = amanhã)
 
 function agList(){ if(!DB.agenda) DB.agenda = []; return DB.agenda; }
+function esperaList(){ if(!DB.espera) DB.espera = []; return DB.espera; }
+function consultasAg(){ return agList().filter(a => !a.bloqueio); }
 function dataSomar(iso, dias){ const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + dias); return d.toISOString().slice(0,10); }
 function diaSemana(iso){ return new Date(iso + 'T12:00:00').getDay(); }
 function segundaDe(iso){ const w = diaSemana(iso); return dataSomar(iso, w === 0 ? -6 : 1 - w); }
 function minDe(h){ const [a,b] = String(h).split(':').map(Number); return a*60 + b; }
 function pacienteDe(id){ return DB.pacientes.find(x => x.id === id) || null; }
+function nomeDoItem(a){ if(a.bloqueio) return a.motivo || 'bloqueio'; const p = pacienteDe(a.pacienteId); return p ? p.nome : '(excluído)'; }
 function conflitos(data, hora, duracao, ignorarId){
   const ini = minDe(hora), fim = ini + duracao;
   return agList().filter(a => a.id !== ignorarId && a.data === data && a.hora
@@ -947,35 +1139,132 @@ function opcoesPacientes(sel){
 }
 function novoAgendamento(){
   const pid = v('agPac'), data = v('agData'), hora = v('agHora'), dur = parseInt(v('agDur'), 10) || 60, tipo = v('agTipo'), obs = v('agObs');
+  const rep = v('agRep') || 'Nao', n = Math.min(12, Math.max(1, parseInt(v('agN'), 10) || 1));
   if(!pid){ alert('Selecione o paciente.'); return; }
   if(!data || !hora){ alert('Informe a data e o horário.'); return; }
+  const passo = rep === 'Quinzenal' ? 14 : 7;
+  const datas = [data];
+  if(rep !== 'Nao') for(let i = 1; i < n; i++) datas.push(dataSomar(data, passo * i));
+  const comConflito = datas.filter(d => conflitos(d, hora, dur, null).length);
+  let escolhidas = datas;
+  if(comConflito.length){
+    const detalhe = comConflito.map(d => fmtData(d) + ' (' + conflitos(d, hora, dur, null).map(a => a.hora + ' ' + nomeDoItem(a)).join(', ') + ')').join('; ');
+    if(!confirm('Há conflito em: ' + detalhe + '.\n\nOK = agendar mesmo assim essas datas.\nCancelar = agendar só as datas sem conflito.'))
+      escolhidas = datas.filter(d => !comConflito.includes(d));
+  }
+  if(!escolhidas.length){ alert('Nenhuma consulta foi agendada.'); return; }
+  const serie = datas.length > 1 ? uid() : null;
+  for(const d of escolhidas){
+    const item = { id:uid(), data:d, hora, duracao:dur, pacienteId:pid, tipo, status:'Agendado', obs };
+    if(serie) item.serieId = serie;
+    agList().push(item);
+  }
+  const espera = esperaList().find(e => e.pacienteId === pid);
+  if(espera && confirm('Este paciente está na lista de espera. Remover da lista?')) DB.espera = esperaList().filter(e => e.id !== espera.id);
+  salvar(); AG_INICIO = segundaDe(escolhidas[0]); render();
+}
+function novoBloqueio(){
+  const data = v('bqData'), hora = v('bqHora'), dur = parseInt(v('bqDur'), 10) || 60, motivo = v('bqMotivo') || 'Bloqueado';
+  if(!data || !hora){ alert('Informe a data e o horário do bloqueio.'); return; }
   const c = conflitos(data, hora, dur, null);
-  if(c.length && !confirm('Há conflito com: ' + c.map(a => a.hora + ' ' + (pacienteDe(a.pacienteId)?.nome || '(excluído)')).join('; ') + '. Agendar mesmo assim?')) return;
-  agList().push({ id:uid(), data, hora, duracao:dur, pacienteId:pid, tipo, status:'Agendado', obs });
+  if(c.length && !confirm('Há conflito com: ' + c.map(a => a.hora + ' ' + nomeDoItem(a)).join('; ') + '. Bloquear mesmo assim?')) return;
+  agList().push({ id:uid(), data, hora, duracao:dur, bloqueio:true, motivo, status:'Bloqueado' });
   salvar(); AG_INICIO = segundaDe(data); render();
 }
 function mudarStatus(id, st){ const a = agList().find(x => x.id === id); if(!a) return; a.status = st; salvar(); render(); }
 function excluirAgenda(id){ if(!confirm('Remover este agendamento?')) return; DB.agenda = agList().filter(a => a.id !== id); salvar(); render(); }
+function excluirSerie(id){
+  const a = agList().find(x => x.id === id); if(!a || !a.serieId) return;
+  const alvo = x => x.serieId === a.serieId && x.data >= a.data && x.status !== 'Realizado' && x.status !== 'Faltou';
+  const n = agList().filter(alvo).length;
+  if(!confirm(`Remover ${n} consulta(s) da série a partir de ${fmtData(a.data)}? As já realizadas ou com falta são mantidas.`)) return;
+  DB.agenda = agList().filter(x => !alvo(x)); salvar(); render();
+}
 function abrirProntuario(pid){ DB.ativo = pid; PRESC_ID = null; TAB = 'prontuario'; salvar(); render(); }
 function mudarSemana(d){ AG_INICIO = dataSomar(AG_INICIO, d * 7); render(); }
 function estaSemana(){ AG_INICIO = segundaDe(hoje()); render(); }
+function marcarLembrete(id){ const a = agList().find(x => x.id === id); if(a){ a.lembrete = hoje(); salvar(); } }
+function setLembretes(d){ LEM_DATA = d || null; render(); }
 function linkLembrete(a, p){
   const digitos = (p.tel || '').replace(/\D/g, '');
   if(digitos.length < 8) return '';
   const fone = digitos.startsWith('55') && digitos.length >= 12 ? digitos : '55' + digitos;
   const txt = `Olá, ${p.nome.split(' ')[0]}! Lembrete da sua consulta de nutrição em ${fmtData(a.data)} às ${a.hora}. Por favor, confirme sua presença. Obrigado!`;
-  return `<a class="btn sec mini" target="_blank" rel="noopener" href="https://wa.me/${fone}?text=${encodeURIComponent(txt)}">WhatsApp</a>`;
+  return `<a class="btn sec mini" target="_blank" rel="noopener" onclick="marcarLembrete('${a.id}')" href="https://wa.me/${fone}?text=${encodeURIComponent(txt)}">WhatsApp</a>`;
 }
 function linhaAg(a){
+  if(a.bloqueio) return `<tr style="opacity:.8">
+    <td style="white-space:nowrap"><b>${esc(a.hora)}</b> <span class="muted">${a.duracao || ''} min</span></td>
+    <td colspan="3"><span class="tag">Bloqueado</span> ${esc(a.motivo || '')}</td>
+    <td><button class="btn danger mini" onclick="excluirAgenda('${a.id}')">Remover</button></td></tr>`;
   const p = pacienteDe(a.pacienteId);
   return `<tr>
     <td style="white-space:nowrap"><b>${esc(a.hora)}</b> <span class="muted">${a.duracao || ''} min</span></td>
-    <td><b>${esc(p ? p.nome : '(paciente excluído)')}</b>${a.obs ? `<div class="muted">${esc(a.obs)}</div>` : ''}</td>
+    <td><b>${esc(p ? p.nome : '(paciente excluído)')}</b>${a.serieId ? ' <span class="tag">recorrente</span>' : ''}${a.obs ? `<div class="muted">${esc(a.obs)}</div>` : ''}${a.lembrete ? `<div class="muted" style="font-size:11px">lembrete enviado em ${fmtData(a.lembrete)}</div>` : ''}</td>
     <td>${esc(a.tipo || '')}</td>
     <td style="white-space:nowrap"><select style="width:auto" onchange="mudarStatus('${a.id}', this.value)">${STATUS_AG.map(s => `<option ${s === a.status ? 'selected' : ''}>${s}</option>`).join('')}</select></td>
     <td style="white-space:nowrap">${p ? `<button class="btn sec mini" onclick="abrirProntuario('${p.id}')">Prontuário</button> ${linkLembrete(a, p)}` : ''}
-      <button class="btn danger mini" onclick="excluirAgenda('${a.id}')">Remover</button></td>
+      <button class="btn danger mini" onclick="excluirAgenda('${a.id}')">Remover</button>${a.serieId ? ` <button class="btn danger mini" onclick="excluirSerie('${a.id}')">Remover série</button>` : ''}</td>
   </tr>`;
+}
+function linhaLembrete(a){
+  const p = pacienteDe(a.pacienteId);
+  const zap = p ? linkLembrete(a, p) : '';
+  return `<tr>
+    <td><b>${esc(a.hora)}</b></td>
+    <td><b>${esc(p ? p.nome : '(paciente excluído)')}</b></td>
+    <td><span class="tag ${a.status === 'Confirmado' ? 'ok' : 'warn'}">${esc(a.status)}</span></td>
+    <td>${a.lembrete ? 'enviado em ' + fmtData(a.lembrete) : '<span class="muted">não enviado</span>'}</td>
+    <td style="white-space:nowrap">${zap || '<span class="muted">sem telefone</span>'}
+      ${a.status === 'Agendado' ? ` <button class="btn mini" onclick="mudarStatus('${a.id}','Confirmado')">Marcar confirmada</button>` : ''}</td>
+  </tr>`;
+}
+function rLembretes(){
+  const dia = LEM_DATA || dataSomar(hoje(), 1);
+  const lista = consultasAg().filter(a => a.data === dia && a.status !== 'Cancelado' && a.status !== 'Realizado' && a.status !== 'Faltou')
+    .sort((a,b) => a.hora < b.hora ? -1 : 1);
+  const pend = lista.filter(a => a.status === 'Agendado').length;
+  return `<div class="card">
+    <div class="row" style="align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">Lembretes e confirmações <span class="tag">${pend} aguardando confirmação</span></h2>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="muted">Dia:</span>
+        <input type="date" value="${dia}" onchange="setLembretes(this.value)" style="width:auto">
+        <button class="btn sec mini" onclick="setLembretes(null)">Amanhã</button></div>
+    </div>
+    ${lista.length ? `<div style="overflow-x:auto;margin-top:10px"><table><thead><tr><th>Hora</th><th>Paciente</th><th>Situação</th><th>Lembrete</th><th></th></tr></thead><tbody>
+      ${lista.map(linhaLembrete).join('')}</tbody></table></div>`
+      : `<p class="muted" style="margin-top:8px">Nenhuma consulta para ${fmtData(dia)}.</p>`}
+    <p class="muted" style="margin-top:8px;font-size:12px">O app não envia mensagens sozinho. O botão WhatsApp abre a conversa com o lembrete pronto e você envia pelo seu celular.</p>
+  </div>`;
+}
+function addEspera(){
+  const pid = v('esPac'), pref = v('esPref'), obs = v('esObs');
+  if(!pid){ alert('Selecione o paciente.'); return; }
+  if(esperaList().some(e => e.pacienteId === pid)){ alert('Este paciente já está na lista de espera.'); return; }
+  esperaList().push({ id:uid(), pacienteId:pid, preferencia:pref, obs, criado:hoje() });
+  salvar(); render();
+}
+function removerEspera(id){ if(!confirm('Remover da lista de espera?')) return; DB.espera = esperaList().filter(e => e.id !== id); salvar(); render(); }
+function agendarDaEspera(id){
+  const e = esperaList().find(x => x.id === id); if(!e) return;
+  DB.ativo = e.pacienteId; salvar(); irPara('agenda', focar('agData'));
+}
+function rEspera(){
+  const lista = esperaList().slice().sort((a,b) => a.criado < b.criado ? -1 : 1);
+  return `<div class="card"><h2>Lista de espera <span class="tag">${lista.length}</span></h2>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));align-items:end">
+      <label>Paciente<select id="esPac">${opcoesPacientes('')}</select></label>
+      <label>Preferência de dia e horário<input id="esPref" placeholder="Ex.: terças à tarde"></label>
+      <label>Observações<input id="esObs"></label>
+      <div><button class="btn sec" onclick="addEspera()">Adicionar à espera</button></div>
+    </div>
+    ${lista.length ? `<div style="overflow-x:auto;margin-top:10px"><table><thead><tr><th>Paciente</th><th>Preferência</th><th>Observações</th><th>Desde</th><th></th></tr></thead><tbody>
+      ${lista.map(e => { const p = pacienteDe(e.pacienteId); return `<tr>
+        <td><b>${esc(p ? p.nome : '(paciente excluído)')}</b></td><td>${esc(e.preferencia || '—')}</td><td>${esc(e.obs || '')}</td><td>${fmtData(e.criado)}</td>
+        <td style="white-space:nowrap"><button class="btn mini" onclick="agendarDaEspera('${e.id}')">Agendar</button>
+          <button class="btn danger mini" onclick="removerEspera('${e.id}')">Remover</button></td></tr>`; }).join('')}
+      </tbody></table></div>` : '<p class="muted" style="margin-top:8px">Ninguém na lista de espera.</p>'}
+  </div>`;
 }
 function rAgenda(){
   const el = document.getElementById('tab-agenda');
@@ -983,7 +1272,7 @@ function rAgenda(){
   const dias = [0,1,2,3,4,5,6].map(i => dataSomar(AG_INICIO, i));
   const itens = agList().filter(a => dias.includes(a.data));
   const hj = hoje(), p0 = pac();
-  const semana = itens.filter(a => a.status !== 'Cancelado').length;
+  const semana = itens.filter(a => !a.bloqueio && a.status !== 'Cancelado').length;
   el.innerHTML = `
   <div class="card"><h2>Novo agendamento</h2>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">
@@ -992,12 +1281,24 @@ function rAgenda(){
       <label>Horário<input type="time" id="agHora" value="08:00"></label>
       <label>Duração<select id="agDur">${DURACOES.map(d => `<option value="${d}" ${d === 60 ? 'selected' : ''}>${d} min</option>`).join('')}</select></label>
       <label>Tipo de consulta<select id="agTipo">${TIPOS_CONSULTA.map(t => `<option>${t}</option>`).join('')}</select></label>
+      <label>Repetir<select id="agRep"><option value="Nao">Não repetir</option><option value="Semanal">Semanal</option><option value="Quinzenal">Quinzenal</option></select></label>
+      <label>Número de consultas<input type="number" id="agN" min="1" max="12" value="1"></label>
       <label style="grid-column:span 2">Observações<input id="agObs" placeholder="Ex.: trazer exames recentes"></label>
     </div>
     <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn" onclick="novoAgendamento()">Agendar</button>
-      <span class="muted">Horários que se sobrepõem a outro agendamento são sinalizados antes de salvar.</span></div>
+      <span class="muted">Horários que se sobrepõem a outro agendamento ou bloqueio são sinalizados antes de salvar.</span></div>
   </div>
+  <div class="card"><h2>Bloquear horário</h2>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));align-items:end">
+      <label>Data<input type="date" id="bqData" value="${hj}"></label>
+      <label>Horário<input type="time" id="bqHora" value="12:00"></label>
+      <label>Duração<select id="bqDur">${DURACOES.map(d => `<option value="${d}" ${d === 60 ? 'selected' : ''}>${d} min</option>`).join('')}</select></label>
+      <label>Motivo<input id="bqMotivo" placeholder="Ex.: almoço, reunião, férias"></label>
+      <div><button class="btn sec" onclick="novoBloqueio()">Bloquear</button></div>
+    </div>
+  </div>
+  ${rLembretes()}
   <div class="card">
     <div class="row" style="align-items:center;justify-content:space-between">
       <h2 style="margin:0">Semana de ${fmtData(dias[0])} a ${fmtData(dias[6])} <span class="tag">${semana} agendamento(s)</span></h2>
@@ -1016,7 +1317,8 @@ function rAgenda(){
                          : '<div class="muted" style="margin-top:4px">Sem agendamentos.</div>'}
         </div>`; }).join('')}
     </div>
-  </div>`;
+  </div>
+  ${rEspera()}`;
 }
 
 /* ---------- exames laboratoriais ---------- */
@@ -1039,6 +1341,77 @@ function novoExame(){
   salvar(); render();
 }
 function excluirExame(id){ if(!confirm('Excluir este resultado?')) return; const p = pac(); p.exames = p.exames.filter(e => e.id !== id); salvar(); render(); }
+/* Atenção clínica: pontos de corte de triagem (não substituem a avaliação médica).
+   Glicemia e HbA1c: SBD. Lipídios: Atualização da Diretriz Brasileira de Dislipidemias (2017).
+   Sódio e potássio: faixas usuais de laboratório. Vitamina D: SBEM/SBPC-ML. Ferritina: depleção de ferro.
+   Hemoglobina: OMS (anemia). TSH: faixa usual 0,4–4,5 mUI/L. */
+function alertaExame(e, p){
+  const nome = norm(e.exame || ''), un = norm(e.unidade || ''), x0 = num(e.valor);
+  if(x0 == null) return null;
+  const hom = !!(p && p.sexo === 'M'), r = [];
+  const add = (nivel, motivo) => r.push({ nivel, motivo });
+  const mgdl = (fator) => un.includes('mmol') ? x0 * fator : x0;
+  if(/glicemia|glicose/.test(nome) && !/glicad|media/.test(nome)){
+    const x = mgdl(18);
+    if(x >= 126) add('alerta', 'Faixa de diabetes (glicemia de jejum ≥ 126 mg/dL)');
+    else if(x >= 100) add('atencao', 'Pré-diabetes (glicemia de jejum 100–125 mg/dL)');
+  }
+  if(/glicada|hba1c/.test(nome)){
+    const x = un.includes('mmol') ? (x0 / 10.929) + 2.15 : x0;
+    if(x >= 6.5) add('alerta', 'Faixa de diabetes (HbA1c ≥ 6,5%)');
+    else if(x >= 5.7) add('atencao', 'Pré-diabetes (HbA1c 5,7–6,4%)');
+  }
+  if(/ldl/.test(nome)){
+    const x = mgdl(38.67);
+    if(x >= 190) add('alerta', 'LDL-colesterol ≥ 190 mg/dL');
+    else if(x >= 160) add('atencao', 'LDL-colesterol ≥ 160 mg/dL (alto)');
+  } else if(/hdl/.test(nome)){
+    const lim = hom ? 40 : 50;
+    if(mgdl(38.67) < lim) add('atencao', 'HDL-colesterol baixo (< ' + lim + ' mg/dL)');
+  } else if(/triglicer/.test(nome)){
+    const x = mgdl(88.57);
+    if(x >= 500) add('alerta', 'Triglicerídeos ≥ 500 mg/dL (risco de pancreatite)');
+    else if(x >= 150) add('atencao', 'Triglicerídeos ≥ 150 mg/dL');
+  } else if(/colesterol total/.test(nome)){
+    if(mgdl(38.67) >= 190) add('atencao', 'Colesterol total ≥ 190 mg/dL');
+  }
+  if(/potassio/.test(nome)){
+    if(x0 < 3.0) add('alerta', 'Hipocalemia grave (< 3,0 mEq/L)');
+    else if(x0 > 6.0) add('alerta', 'Hipercalemia grave (> 6,0 mEq/L)');
+    else if(x0 < 3.5) add('atencao', 'Hipocalemia (< 3,5 mEq/L)');
+    else if(x0 > 5.0) add('atencao', 'Hipercalemia (> 5,0 mEq/L)');
+  }
+  if(/sodio/.test(nome)){
+    if(x0 < 120 || x0 > 160) add('alerta', x0 < 120 ? 'Hiponatremia grave (< 120 mEq/L)' : 'Hipernatremia grave (> 160 mEq/L)');
+    else if(x0 < 135) add('atencao', 'Hiponatremia (< 135 mEq/L)');
+    else if(x0 > 145) add('atencao', 'Hipernatremia (> 145 mEq/L)');
+  }
+  if(/calcio/.test(nome)){
+    if(x0 < 8.5) add('atencao', 'Cálcio abaixo de 8,5 mg/dL');
+    else if(x0 > 10.5) add('atencao', 'Cálcio acima de 10,5 mg/dL');
+  }
+  if(/ferritina/.test(nome) && x0 < 30) add('atencao', 'Depleção de ferro (ferritina < 30 ng/mL)');
+  if(/vitamina d|25.?hidroxi|25 ?\(oh\)/.test(nome)){
+    const x = un.includes('nmol') ? x0 / 2.5 : x0;
+    if(x > 100) add('alerta', 'Risco de intoxicação por vitamina D (> 100 ng/mL)');
+    else if(x < 20) add('atencao', 'Deficiência de vitamina D (< 20 ng/mL)');
+  }
+  if(/b12|cobalamina/.test(nome) && x0 < 200) add('atencao', 'Possível deficiência de vitamina B12 (< 200 pg/mL)');
+  if(/^hemoglobina$/.test(nome.trim())){
+    const x = x0 > 25 ? x0 / 10 : x0;
+    if(x < (hom ? 13 : 12)) add('atencao', 'Anemia (OMS: < ' + (hom ? '13' : '12') + ' g/dL)');
+  }
+  if(/tsh/.test(nome)){
+    if(x0 > 4.5) add('atencao', 'TSH acima de 4,5 mUI/L');
+    else if(x0 < 0.4) add('atencao', 'TSH abaixo de 0,4 mUI/L');
+  }
+  if(!r.length) return null;
+  return r.some(a => a.nivel === 'alerta') ? { nivel:'alerta', motivo: r.map(a => a.motivo).join('; ') } : { nivel:'atencao', motivo: r.map(a => a.motivo).join('; ') };
+}
+function tagAlerta(al){
+  if(!al) return '—';
+  return `<span class="tag ${al.nivel === 'alerta' ? 'bad' : 'warn'}">${al.nivel === 'alerta' ? 'Alerta' : 'Atenção'}</span> <span style="font-size:12px">${esc(al.motivo)}</span>`;
+}
 function rExames(){
   const el = document.getElementById('tab-exames'), p = pac();
   if(!p){ el.innerHTML = semPaciente(); return; }
@@ -1051,7 +1424,22 @@ function rExames(){
     const cron = lista.slice().reverse();
     cron.forEach((e, i) => { const x = num(e.valor), px = i ? num(cron[i-1].valor) : null; if(x != null && px) variacao.set(e.id, (x - px) / px * 100); });
   }
+  const vistos = new Set(), pontos = [];
+  todos.forEach(e => { if(vistos.has(e.exame)) return; vistos.add(e.exame);
+    const al = alertaExame(e, p), st = statusExame(e);
+    if(al || (st && st[1] !== 'ok')) pontos.push({ e, al, st }); });
+  const ordem = { alerta:0, atencao:1 };
+  pontos.sort((a,b) => (a.al ? ordem[a.al.nivel] : 2) - (b.al ? ordem[b.al.nivel] : 2));
+  const pontosHtml = pontos.length ? `<div style="overflow-x:auto"><table><thead><tr><th>Exame</th><th>Data</th><th class="num">Resultado</th><th>Referência do laboratório</th><th>Atenção clínica</th></tr></thead><tbody>
+    ${pontos.map(({e, al, st}) => `<tr style="${al && al.nivel === 'alerta' ? 'background:#fde8e7' : al ? 'background:#fff7ed' : ''}"><td><b>${esc(e.exame)}</b></td><td>${fmtData(e.data)}</td>
+    <td class="num">${esc(e.valor)} ${esc(e.unidade || '')}</td>
+    <td>${st ? `<span class="tag ${st[1]}">${st[0]}</span>` : '—'}</td><td>${tagAlerta(al)}</td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="empty">Nenhum resultado fora da referência ou em faixa de atenção.</div>';
   el.innerHTML = `
+  <div class="card"><h2>Pontos de atenção · último resultado de cada exame</h2>
+    ${pontosHtml}
+    <p class="muted" style="font-size:12px;margin-top:8px">Alerta: achado que pede contato médico em breve. Atenção: achado fora da faixa desejável que pede acompanhamento. Os pontos de corte são de triagem (SBD para glicemia e HbA1c; Diretriz Brasileira de Dislipidemias 2017 para lipídios; SBEM/SBPC para vitamina D; OMS para hemoglobina) e não substituem a interpretação médica, que considera o contexto clínico e a repetição do exame.</p>
+  </div>
   <div class="card"><h2>Novo resultado · ${esc(p.nome)}</h2>
     <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
       <label>Data da coleta<input type="date" id="xeData" value="${hoje()}"></label>
@@ -1074,11 +1462,11 @@ function rExames(){
         ${nomes.map(n => `<option value="${esc(n)}" ${n === EXAME_SEL ? 'selected' : ''}>${esc(n)}</option>`).join('')}
       </select>
     </div>
-    ${lista.length ? `<div style="overflow-x:auto"><table><thead><tr><th>Data</th><th>Exame</th><th class="num">Resultado</th><th>Unidade</th><th class="num">Referência</th><th>Situação</th>${EXAME_SEL ? '<th class="num">Variação</th>' : ''}<th>Laboratório</th><th>Observações</th><th></th></tr></thead><tbody>
-      ${lista.map(e => { const st = statusExame(e), va = variacao.get(e.id);
-        return `<tr><td>${fmtData(e.data)}</td><td>${esc(e.exame)}</td><td class="num"><b>${esc(e.valor)}</b></td><td>${esc(e.unidade || '')}</td>
+    ${lista.length ? `<div style="overflow-x:auto"><table><thead><tr><th>Data</th><th>Exame</th><th class="num">Resultado</th><th>Unidade</th><th class="num">Referência</th><th>Situação</th><th>Atenção clínica</th>${EXAME_SEL ? '<th class="num">Variação</th>' : ''}<th>Laboratório</th><th>Observações</th><th></th></tr></thead><tbody>
+      ${lista.map(e => { const st = statusExame(e), va = variacao.get(e.id), al = alertaExame(e, p);
+        return `<tr style="${al && al.nivel === 'alerta' ? 'background:#fde8e7' : al ? 'background:#fff7ed' : ''}"><td>${fmtData(e.data)}</td><td>${esc(e.exame)}</td><td class="num"><b>${esc(e.valor)}</b></td><td>${esc(e.unidade || '')}</td>
         <td class="num">${(e.refMin == null && e.refMax == null) ? '—' : nf(e.refMin) + ' – ' + nf(e.refMax)}</td>
-        <td>${st ? `<span class="tag ${st[1]}">${st[0]}</span>` : '—'}</td>
+        <td>${st ? `<span class="tag ${st[1]}">${st[0]}</span>` : '—'}</td><td>${tagAlerta(al)}</td>
         ${EXAME_SEL ? `<td class="num">${va == null ? '—' : (va > 0 ? '+' : '') + fmt(va) + '%'}</td>` : ''}
         <td>${esc(e.lab || '')}</td><td>${esc(e.obs || '')}</td>
         <td><button class="btn danger mini" onclick="excluirExame('${e.id}')">×</button></td></tr>`; }).join('')}
@@ -1444,10 +1832,34 @@ function rPresc(){
 /* ---------- alimentos ---------- */
 function filtrarAlim(q){
   BUSCA = q; const t = norm(q);
-  const lista = (t ? ALIM.filter(a => norm(a.nome).includes(t)) : ALIM).slice(0, 300);
+  const proprios = ALIM.filter(a => a.src !== 'TACO');           // TBCA/personalizados/preparações primeiro
+  const ordem = proprios.concat(ALIM.filter(a => a.src === 'TACO'));
+  const lista = (t ? ordem.filter(a => norm(a.nome).includes(t)) : ordem).slice(0, 300);
   document.getElementById('listaAlim').innerHTML = `<table><thead><tr><th>Alimento</th><th>Fonte</th><th>Código</th><th class="num">kcal</th><th class="num">PTN</th><th class="num">LIP</th><th class="num">CHO</th><th class="num">Fibra</th><th class="num">Col (mg)</th><th class="num">Ca (mg)</th><th class="num">Mg (mg)</th><th></th></tr></thead><tbody>
-    ${lista.map(a => `<tr><td>${esc(a.nome)}</td><td><span class="tag">${esc(a.src)}</span></td><td>${esc(a.cod)}</td><td class="num">${fmt(a.k,0)}</td><td class="num">${fmt(a.p)}</td><td class="num">${fmt(a.l)}</td><td class="num">${fmt(a.c)}</td><td class="num">${fmt(a.f)}</td><td class="num">${fmt(a.col,0)}</td><td class="num">${fmt(a.ca,0)}</td><td class="num">${fmt(a.mg,0)}</td><td>${a.src === 'TACO' ? '' : `<button class="btn danger mini" onclick="excluirAlim('${esc(a.key)}')">×</button>`}</td></tr>`).join('') || '<tr><td colspan="12" class="muted">Nenhum alimento encontrado.</td></tr>'}
+    ${lista.map(a => `<tr><td>${esc(a.nome)}</td><td><span class="tag">${esc(a.src)}</span></td><td>${esc(a.cod)}</td><td class="num">${fmt(a.k,0)}</td><td class="num">${fmt(a.p)}</td><td class="num">${fmt(a.l)}</td><td class="num">${fmt(a.c)}</td><td class="num">${fmt(a.f)}</td><td class="num">${fmt(a.col,0)}</td><td class="num">${fmt(a.ca,0)}</td><td class="num">${fmt(a.mg,0)}</td><td>${(a.src === 'TACO' || a.src === 'Preparação') ? '' : `<button class="btn sec mini" onclick="editarAlim('${esc(a.key)}')">Editar</button> <button class="btn danger mini" onclick="excluirAlim('${esc(a.key)}')">×</button>`}</td></tr>`).join('') || '<tr><td colspan="12" class="muted">Nenhum alimento encontrado.</td></tr>'}
     </tbody></table>${lista.length === 300 ? '<p class="muted" style="font-size:12px">Mostrando os 300 primeiros; refine a busca.</p>' : ''}`;
+}
+let EDIT_ALIM = null;   // key do alimento personalizado em edição (null = novo)
+function editarAlim(key){
+  const a = DB.extras.find(x => x.key === key);
+  if(!a) return;
+  EDIT_ALIM = key;
+  const set = (id, val) => { document.getElementById(id).value = (val === undefined || val === null) ? '' : val; };
+  set('xNome', a.nome); set('xSrc', a.src); set('xCod', a.cod);
+  set('xk', a.k); set('xp', a.p); set('xl', a.l); set('xc', a.c); set('xf', a.f);
+  set('xcol', a.col); set('xca', a.ca); set('xmg', a.mg);
+  const btn = document.getElementById('btnSalvarAlim');
+  if(btn) btn.textContent = 'Salvar alterações';
+  const cancel = document.getElementById('btnCancelAlim');
+  if(cancel) cancel.style.display = '';
+  document.getElementById('formAlim').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+function cancelarEdicaoAlim(){
+  EDIT_ALIM = null;
+  ['xNome','xCod','xk','xp','xl','xc','xf','xcol','xca','xmg'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('xSrc').value = 'TBCA';
+  document.getElementById('btnSalvarAlim').textContent = 'Salvar alimento';
+  document.getElementById('btnCancelAlim').style.display = 'none';
 }
 function novoAlim(){
   const nome = v('xNome');
@@ -1455,9 +1867,17 @@ function novoAlim(){
   const src = v('xSrc');
   const cod = (v('xCod') || ('EXT' + Date.now().toString(36))).replace(/[^\w.-]/g, '');
   const key = src + ':' + cod;
-  if(MAPA.has(key)){ alert('Já existe um alimento com este código nesta fonte.'); return; }
+  const existe = MAPA.has(key) && !(EDIT_ALIM && key === EDIT_ALIM);
+  if(existe){ alert('Já existe um alimento com este código nesta fonte.'); return; }
   const n = id => num(v(id));
-  DB.extras.push({ key, src, cod, nome, k:n('xk'), p:n('xp'), l:n('xl'), c:n('xc'), f:n('xf'), col:n('xcol'), ca:n('xca'), mg:n('xmg') });
+  const item = { key, src, cod, nome, k:n('xk'), p:n('xp'), l:n('xl'), c:n('xc'), f:n('xf'), col:n('xcol'), ca:n('xca'), mg:n('xmg') };
+  if(EDIT_ALIM){
+    const i = DB.extras.findIndex(x => x.key === EDIT_ALIM);
+    if(i >= 0) DB.extras[i] = item; else DB.extras.push(item);
+    EDIT_ALIM = null;
+  } else {
+    DB.extras.push(item);
+  }
   salvar(); montarAlimentos(); render();
 }
 function excluirAlim(key){
@@ -1471,7 +1891,7 @@ function rAlim(){
     <p class="muted" style="font-size:12px;margin:8px 0">Valores por 100 g de parte comestível. "—" indica dado não disponível na fonte. Fonte base: TACO, 4ª edição ampliada e revisada.</p>
     <div id="listaAlim" style="overflow-x:auto"></div>
   </div>
-  <div class="card"><h2>Adicionar alimento (TBCA ou personalizado)</h2>
+  <div class="card" id="formAlim"><h2>${EDIT_ALIM ? 'Editar alimento' : 'Adicionar alimento'} (TBCA ou personalizado)</h2>
     <p class="muted" style="font-size:12px">A TBCA não oferece download em lote: consulte o alimento em tbca.net.br e registre aqui o código e os valores por 100 g.</p>
     <div class="grid" style="margin-top:10px">
       <label>Nome<input id="xNome"></label>
@@ -1486,9 +1906,11 @@ function rAlim(){
       <label>Cálcio (mg)<input id="xca" inputmode="decimal"></label>
       <label>Magnésio (mg)<input id="xmg" inputmode="decimal"></label>
     </div>
-    <div style="margin-top:10px"><button class="btn" onclick="novoAlim()">Salvar alimento</button></div>
-  </div>`;
+    <div style="margin-top:10px"><button class="btn" id="btnSalvarAlim" onclick="novoAlim()">${EDIT_ALIM ? 'Salvar alterações' : 'Salvar alimento'}</button> <button class="btn sec" id="btnCancelAlim" onclick="cancelarEdicaoAlim()" style="display:${EDIT_ALIM ? '' : 'none'}">Cancelar edição</button></div>
+  </div>
+  <div id="tab-prep"></div>`;
   filtrarAlim(BUSCA);
+  rPrep();
 }
 
 /* ---------- backup ---------- */
@@ -1505,7 +1927,7 @@ function importar(input){
       const x = JSON.parse(r.result);
       if(!x || !Array.isArray(x.pacientes)) throw new Error('arquivo sem a lista de pacientes');
       if(!confirm('Substituir os dados atuais pelo conteúdo deste backup?')) return;
-      DB = x; DB.extras = DB.extras || []; DB.agenda = DB.agenda || []; DB.ativo = null; PRESC_ID = null;
+      DB = x; DB.extras = DB.extras || []; DB.agenda = DB.agenda || []; DB.espera = DB.espera || []; finDados(); DB.ativo = null; PRESC_ID = null;
       salvar(); montarAlimentos(); render();
     } catch(e){ alert('Não foi possível importar: ' + e.message); }
   };
@@ -1514,8 +1936,776 @@ function importar(input){
 function apagarTudo(){
   if(!confirm('Apagar TODOS os pacientes e dados deste navegador?')) return;
   if(!confirm('Tem certeza? Não há como recuperar sem um backup.')) return;
-  DB = { pacientes:[], extras:[], agenda:[], ativo:null }; PRESC_ID = null; salvar(); montarAlimentos(); render();
+  DB = { pacientes:[], extras:[], agenda:[], espera:[], financeiro:{}, ativo:null }; PRESC_ID = null; salvar(); montarAlimentos(); render();
 }
+/* ---------- financeiro: cobranças, pacotes, pendências, recibos e fluxo de caixa ---------- */
+const FORMAS_PAGTO = ['Pix','Cartão','Dinheiro','Transferência','Outro'];
+let FIN = { pac: '', tipo: 'Consulta', consulta: '', pacote: '', mes: '' };
+function finDados(){
+  if(!DB.financeiro) DB.financeiro = {};
+  const f = DB.financeiro;
+  f.profissional = f.profissional || ''; f.registro = f.registro || ''; f.documento = f.documento || '';
+  f.valorPadrao = Number(f.valorPadrao) || 0;
+  f.pacotes = f.pacotes || []; f.pagamentos = f.pagamentos || [];
+  return f;
+}
+// Como cada consulta realizada do paciente está coberta: Pago, Pacote ou Pendente
+function finSituacao(pid){
+  const f = finDados();
+  const pagas = new Set(f.pagamentos.filter(x => x.tipo === 'Consulta' && x.consultaId).map(x => x.consultaId));
+  const comprados = f.pagamentos.filter(x => x.tipo === 'Pacote' && x.pacienteId === pid).reduce((s, x) => s + (Number(x.sessoes) || 0), 0);
+  const consultas = agList().filter(a => a.pacienteId === pid && a.status === 'Realizado')
+    .sort((a, b) => ((a.data + a.hora) < (b.data + b.hora)) ? -1 : 1);
+  let saldo = comprados;
+  const itens = consultas.map(a => {
+    if(pagas.has(a.id)) return { a, situacao: 'Pago' };
+    if(saldo > 0){ saldo--; return { a, situacao: 'Pacote' }; }
+    return { a, situacao: 'Pendente' };
+  });
+  return { itens, saldo, comprados };
+}
+function finDiasEm(data){ return Math.floor((new Date(hoje() + 'T12:00:00') - new Date(data + 'T12:00:00')) / 86400000); }
+function setFin(campo, valor){
+  FIN[campo] = valor;
+  if(campo === 'pac') FIN.consulta = '';
+  if(campo === 'tipo'){ FIN.consulta = ''; FIN.pacote = ''; }
+  rFin();
+}
+function cobrarConsulta(cid){
+  const a = agList().find(x => x.id === cid); if(!a) return;
+  FIN = Object.assign(FIN, { pac: a.pacienteId, tipo: 'Consulta', consulta: cid });
+  rFin();
+  const el = document.getElementById('fPagValor'); if(el) el.scrollIntoView({ block: 'center' });
+}
+function salvarFinConfig(){
+  const f = finDados();
+  f.profissional = v('fProf'); f.registro = v('fReg'); f.documento = v('fDoc');
+  f.valorPadrao = num(v('fValor')) || 0;
+  salvar(); rFin();
+}
+function addPacote(){
+  const f = finDados();
+  const nome = v('fPkNome'), sess = parseInt(v('fPkSess'), 10), valor = num(v('fPkValor'));
+  if(!nome || !(sess > 0) || valor == null || valor < 0){ alert('Informe o nome do pacote, o número de consultas e o valor.'); return; }
+  f.pacotes.push({ id: uid(), nome, sessoes: sess, valor });
+  salvar(); rFin();
+}
+function delPacote(id){
+  if(!confirm('Remover este pacote da lista? Os pagamentos já registrados não são alterados.')) return;
+  const f = finDados(); f.pacotes = f.pacotes.filter(x => x.id !== id); salvar(); rFin();
+}
+function registrarPagamento(){
+  const f = finDados();
+  const pid = document.getElementById('fPac').value;
+  if(!pid){ alert('Escolha o paciente.'); return; }
+  const valor = num(document.getElementById('fPagValor').value);
+  if(valor == null || valor <= 0){ alert('Informe um valor maior que zero.'); return; }
+  const pag = {
+    id: uid(), pacienteId: pid, tipo: FIN.tipo, valor,
+    forma: document.getElementById('fForma').value,
+    data: document.getElementById('fData').value || hoje(),
+    obs: document.getElementById('fObs').value.trim()
+  };
+  if(FIN.tipo === 'Consulta'){
+    const cid = document.getElementById('fCons').value;
+    if(cid) pag.consultaId = cid;
+  } else {
+    const pk = f.pacotes.find(x => x.id === document.getElementById('fPacote').value);
+    if(!pk){ alert('Escolha um pacote. Cadastre os pacotes na configuração acima.'); return; }
+    pag.pacoteNome = pk.nome; pag.sessoes = Number(pk.sessoes) || 0;
+  }
+  f.pagamentos.push(pag);
+  FIN.consulta = '';
+  salvar(); rFin();
+}
+function excluirPagamento(id){
+  if(!confirm('Excluir este pagamento? Não há como desfazer.')) return;
+  const f = finDados(); f.pagamentos = f.pagamentos.filter(x => x.id !== id); salvar(); rFin();
+}
+function reciboPagamento(id){
+  const f = finDados();
+  const pg = f.pagamentos.find(x => x.id === id); if(!pg) return;
+  const p = pacienteDe(pg.pacienteId);
+  let desc = 'atendimento de nutrição';
+  if(pg.tipo === 'Pacote') desc = `pacote "${pg.pacoteNome}" (${pg.sessoes} consulta(s))`;
+  else if(pg.consultaId){
+    const a = agList().find(x => x.id === pg.consultaId);
+    if(a) desc = `consulta de nutrição realizada em ${fmtData(a.data)}`;
+  }
+  const w = window.open('', '_blank');
+  if(!w){ alert('O navegador bloqueou a janela do recibo. Permita pop-ups para este site.'); return; }
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Recibo</title>
+<style>body{font-family:Arial,sans-serif;max-width:720px;margin:40px auto;color:#222;line-height:1.6}
+h1{font-size:20px;text-align:center;color:#b0305a;margin-bottom:24px}
+.box{border:1px solid #bbb;border-radius:8px;padding:24px}
+.ass{margin-top:70px;text-align:center}.ass div{border-top:1px solid #222;width:340px;margin:0 auto;padding-top:6px}
+@media print{body{margin:0}}</style></head><body>
+<h1>RECIBO</h1>
+<div class="box">
+<p>Recebi de <b>${esc(p ? p.nome : '(paciente excluído)')}</b> a importância de <b>R$ ${fmt(pg.valor, 2)}</b>, referente a ${esc(desc)}, em ${fmtData(pg.data)}, na forma de pagamento: ${esc(pg.forma)}.</p>
+${pg.obs ? `<p>Observações: ${esc(pg.obs)}</p>` : ''}
+</div>
+<div class="ass"><div>${esc(f.profissional || '')}</div>
+<div style="border:none;font-size:13px">${f.registro ? 'Registro ' + esc(f.registro) : ''}${f.documento ? ' · ' + esc(f.documento) : ''}</div></div>
+</body></html>`);
+  w.document.close(); w.focus(); w.print();
+}
+function opcoesPendentesPac(pid){
+  if(!pid) return '';
+  return finSituacao(pid).itens.filter(i => i.situacao === 'Pendente').map(i =>
+    `<option value="${i.a.id}" ${FIN.consulta === i.a.id ? 'selected' : ''}>${fmtData(i.a.data)} ${esc(i.a.hora)} · ${esc(i.a.tipo || 'Consulta')}</option>`).join('');
+}
+function rFin(){
+  const el = document.getElementById('tab-financeiro');
+  const f = finDados();
+  if(!FIN.mes) FIN.mes = hoje().slice(0, 7);
+  const pacs = DB.pacientes.slice().sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  const pacDe = pid => pacs.find(p => p.id === pid);
+  // pendências e inadimplência
+  const pend = [];
+  for(const p of pacs) for(const it of finSituacao(p.id).itens) if(it.situacao === 'Pendente') pend.push({ p, a: it.a });
+  pend.sort((x, y) => x.a.data < y.a.data ? -1 : 1);
+  const emAberto = pend.length * f.valorPadrao;
+  // sugestão de valor
+  let sugestao = '';
+  if(FIN.tipo === 'Consulta' && FIN.consulta) sugestao = f.valorPadrao;
+  if(FIN.tipo === 'Pacote' && FIN.pacote){ const pk = f.pacotes.find(x => x.id === FIN.pacote); if(pk) sugestao = pk.valor; }
+  const sugestaoTxt = sugestao ? String(sugestao).replace('.', ',') : '';
+  // fluxo de caixa do mês
+  const doMes = f.pagamentos.filter(x => (x.data || '').slice(0, 7) === FIN.mes).sort((x, y) => x.data < y.data ? 1 : -1);
+  const totalMes = doMes.reduce((s, x) => s + (Number(x.valor) || 0), 0);
+  const porForma = FORMAS_PAGTO.map(fp => [fp, doMes.filter(x => x.forma === fp).reduce((s, x) => s + (Number(x.valor) || 0), 0)]).filter(([, t]) => t > 0);
+  el.innerHTML = `
+  <div class="card"><h2>Configuração financeira</h2>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
+      <label>Profissional<input id="fProf" value="${esc(f.profissional)}"></label>
+      <label>Registro (CRN)<input id="fReg" value="${esc(f.registro)}"></label>
+      <label>CPF ou CNPJ<input id="fDoc" value="${esc(f.documento)}"></label>
+      <label>Valor padrão por consulta (R$)<input id="fValor" value="${f.valorPadrao ? String(f.valorPadrao).replace('.', ',') : ''}" placeholder="0,00"></label>
+    </div>
+    <div style="margin-top:10px"><button class="btn" onclick="salvarFinConfig()">Salvar configuração</button></div>
+    <h2 style="margin-top:18px">Pacotes de consultas</h2>
+    ${f.pacotes.length ? `<div style="overflow-x:auto"><table><thead><tr><th>Pacote</th><th>Consultas</th><th>Valor</th><th></th></tr></thead><tbody>
+      ${f.pacotes.map(k => `<tr><td>${esc(k.nome)}</td><td>${k.sessoes}</td><td>R$ ${fmt(k.valor, 2)}</td><td><button class="btn danger mini" onclick="delPacote('${k.id}')">Remover</button></td></tr>`).join('')}
+    </tbody></table></div>` : '<p class="muted">Nenhum pacote cadastrado.</p>'}
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:10px;align-items:end">
+      <label>Nome do pacote<input id="fPkNome" placeholder="Ex.: 4 consultas"></label>
+      <label>Consultas<input id="fPkSess" type="number" min="1" placeholder="4"></label>
+      <label>Valor (R$)<input id="fPkValor" placeholder="0,00"></label>
+      <div><button class="btn sec" onclick="addPacote()">Adicionar pacote</button></div>
+    </div>
+  </div>
+
+  <div class="card"><h2>Registrar pagamento</h2>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">
+      <label style="grid-column:span 2">Paciente<select id="fPac" onchange="setFin('pac', this.value)"><option value="">— escolha —</option>${pacs.map(p => `<option value="${p.id}" ${p.id === FIN.pac ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></label>
+      <label>Tipo<select id="fTipo" onchange="setFin('tipo', this.value)"><option ${FIN.tipo === 'Consulta' ? 'selected' : ''}>Consulta</option><option ${FIN.tipo === 'Pacote' ? 'selected' : ''}>Pacote</option></select></label>
+      ${FIN.tipo === 'Consulta'
+        ? `<label style="grid-column:span 2">Referente a<select id="fCons" onchange="setFin('consulta', this.value)"><option value="">Sem consulta (adiantamento)</option>${opcoesPendentesPac(FIN.pac)}</select></label>`
+        : `<label style="grid-column:span 2">Pacote<select id="fPacote" onchange="setFin('pacote', this.value)"><option value="">— escolha —</option>${f.pacotes.map(k => `<option value="${k.id}" ${k.id === FIN.pacote ? 'selected' : ''}>${esc(k.nome)} · ${k.sessoes} consulta(s)</option>`).join('')}</select></label>`}
+      <label>Valor (R$)<input id="fPagValor" value="${sugestaoTxt}" placeholder="0,00"></label>
+      <label>Forma de pagamento<select id="fForma">${FORMAS_PAGTO.map(fp => `<option>${fp}</option>`).join('')}</select></label>
+      <label>Data<input type="date" id="fData" value="${hoje()}"></label>
+      <label style="grid-column:span 2">Observações<input id="fObs"></label>
+    </div>
+    <div style="margin-top:10px"><button class="btn" onclick="registrarPagamento()">Registrar pagamento</button></div>
+    <p class="muted" style="margin-top:8px">Uma consulta fica como paga quando recebe um pagamento vinculado a ela. Pacotes cobrem as consultas realizadas mais antigas que ainda estão em aberto.</p>
+  </div>
+
+  <div class="card"><h2>Pendências <span class="tag">${pend.length} consulta(s) · R$ ${fmt(emAberto, 2)} em aberto</span></h2>
+    ${pend.length ? `<div style="overflow-x:auto"><table><thead><tr><th>Paciente</th><th>Consulta</th><th>Valor</th><th>Dias em aberto</th><th></th></tr></thead><tbody>
+      ${pend.map(({ p, a }) => { const d = finDiasEm(a.data); return `<tr><td><b>${esc(p.nome)}</b></td><td>${fmtData(a.data)} ${esc(a.hora)}</td><td>R$ ${fmt(f.valorPadrao, 2)}</td>
+        <td>${d} ${d > 30 ? '<span class="tag" style="background:#fde8ee;color:#b3261e">inadimplente</span>' : ''}</td>
+        <td><button class="btn mini" onclick="cobrarConsulta('${a.id}')">Cobrar</button></td></tr>`; }).join('')}
+    </tbody></table></div>` : '<p class="muted">Nenhuma consulta em aberto.</p>'}
+  </div>
+
+  <div class="card"><h2>Saldo de pacotes</h2>
+    ${pacs.filter(p => finSituacao(p.id).comprados > 0).map(p => { const s = finSituacao(p.id); return `<div style="border-top:1px solid var(--line);padding:6px 0"><b>${esc(p.nome)}</b> <span class="muted">· ${s.saldo} de ${s.comprados} consulta(s) restante(s)</span></div>`; }).join('')
+      || '<p class="muted">Nenhum paciente com pacote.</p>'}
+  </div>
+
+  <div class="card"><h2>Fluxo de caixa mensal</h2>
+    <div class="row" style="align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+      <label style="flex-direction:row;align-items:center;gap:8px">Mês<input type="month" id="fMes" value="${FIN.mes}" onchange="setFin('mes', this.value)" style="width:auto"></label>
+      <b>Total recebido: R$ ${fmt(totalMes, 2)}</b>
+    </div>
+    ${porForma.length ? `<p class="muted" style="margin-top:8px">${porForma.map(([fp, t]) => `${fp}: R$ ${fmt(t, 2)}`).join(' · ')}</p>` : ''}
+    ${doMes.length ? `<div style="overflow-x:auto;margin-top:10px"><table><thead><tr><th>Data</th><th>Paciente</th><th>Descrição</th><th>Forma</th><th>Valor</th><th></th></tr></thead><tbody>
+      ${doMes.map(x => { const p = pacDe(x.pacienteId); return `<tr><td>${fmtData(x.data)}</td><td>${esc(p ? p.nome : '(excluído)')}</td>
+        <td>${x.tipo === 'Pacote' ? 'Pacote: ' + esc(x.pacoteNome) : 'Consulta'}${x.obs ? ` <span class="muted">· ${esc(x.obs)}</span>` : ''}</td>
+        <td>${esc(x.forma)}</td><td>R$ ${fmt(x.valor, 2)}</td>
+        <td style="white-space:nowrap"><button class="btn sec mini" onclick="reciboPagamento('${x.id}')">Recibo</button>
+          <button class="btn danger mini" onclick="excluirPagamento('${x.id}')">Excluir</button></td></tr>`; }).join('')}
+    </tbody></table></div>` : '<p class="muted" style="margin-top:8px">Nenhum pagamento neste mês.</p>'}
+  </div>`;
+}
+/* ---------- documentos prontos com os dados do paciente ---------- */
+const DOC_TIPOS = [
+  ['recibo','Recibo'],
+  ['declaracao','Declaração de comparecimento'],
+  ['atestado','Atestado de acompanhamento nutricional'],
+  ['consentimento','Termo de consentimento (atendimento e imagem)'],
+  ['substituicao','Lista de substituição de alimentos']
+];
+let DOC = { tipo:'recibo', pac:'', plano:'', val:{} };
+const DOC_P = 'font-size:13px;line-height:1.7;margin:8px 0';
+
+/* valor por extenso (reais e centavos), para o recibo */
+const UNID = ['zero','um','dois','três','quatro','cinco','seis','sete','oito','nove','dez','onze','doze','treze','catorze','quinze','dezesseis','dezessete','dezoito','dezenove'];
+const DEZ = ['','','vinte','trinta','quarenta','cinquenta','sessenta','setenta','oitenta','noventa'];
+const CENT = ['','cento','duzentos','trezentos','quatrocentos','quinhentos','seiscentos','setecentos','oitocentos','novecentos'];
+function ate999(n){
+  if(n === 100) return 'cem';
+  const h = Math.floor(n / 100), r = n % 100, partes = [];
+  if(h) partes.push(CENT[h]);
+  if(r){ if(r < 20) partes.push(UNID[r]); else partes.push(DEZ[Math.floor(r / 10)] + (r % 10 ? ' e ' + UNID[r % 10] : '')); }
+  return partes.join(' e ');
+}
+function porExtenso(n){
+  if(n === 0) return 'zero';
+  const mi = Math.floor(n / 1e6), mil = Math.floor((n % 1e6) / 1000), r = n % 1000, partes = [];
+  if(mi) partes.push(mi === 1 ? 'um milhão' : ate999(mi) + ' milhões');
+  if(mil) partes.push(mil === 1 ? 'mil' : ate999(mil) + ' mil');
+  if(r) partes.push((partes.length && (r < 100 || r % 100 === 0) ? 'e ' : '') + ate999(r));
+  return partes.join(' ');
+}
+function valorPorExtenso(valor){
+  const c = Math.round(valor * 100), reais = Math.floor(c / 100), cent = c % 100;
+  let s = porExtenso(reais) + (reais === 1 ? ' real' : ' reais');
+  if(cent) s += ' e ' + porExtenso(cent) + (cent === 1 ? ' centavo' : ' centavos');
+  return s;
+}
+
+/* campos de cada documento: id, rótulo, tipo de campo e valor padrão */
+function docCampos(tipo){
+  const hj = hoje();
+  return ({
+    recibo: [
+      {id:'data', rot:'Data', t:'date', def:hj},
+      {id:'valor', rot:'Valor (R$)', t:'text', def:''},
+      {id:'forma', rot:'Forma de pagamento', t:'select', opts:FORMAS_PAGTO, def:'Pix'},
+      {id:'descricao', rot:'Referente a', t:'text', def:'atendimento de nutrição', larga:true}],
+    declaracao: [
+      {id:'data', rot:'Data da consulta', t:'date', def:hj},
+      {id:'inicio', rot:'Horário de início', t:'time', def:'08:00'},
+      {id:'fim', rot:'Horário de término', t:'time', def:'09:00'},
+      {id:'finalidade', rot:'Finalidade', t:'text', def:'comprovação de comparecimento', larga:true}],
+    atestado: [
+      {id:'emissao', rot:'Data de emissão', t:'date', def:hj},
+      {id:'desde', rot:'Em acompanhamento desde', t:'date', def:''},
+      {id:'finalidade', rot:'Finalidade', t:'text', def:'apresentação a quem de direito', larga:true}],
+    consentimento: [
+      {id:'data', rot:'Data', t:'date', def:hj},
+      {id:'fotoProntuario', rot:'Autorizo fotos no prontuário (avaliação corporal)', t:'check', def:true},
+      {id:'fotoEducativo', rot:'Autorizo uso das fotos em material educativo, sem identificação do rosto', t:'check', def:false},
+      {id:'fotoIdentificado', rot:'Autorizo divulgação das fotos com identificação (redes sociais)', t:'check', def:false},
+      {id:'whatsapp', rot:'Autorizo contato por WhatsApp para lembretes e orientações', t:'check', def:true}],
+    substituicao: []
+  })[tipo] || [];
+}
+function docVal(c){ const k = DOC.tipo + '.' + c.id; return k in DOC.val ? DOC.val[k] : c.def; }
+function docProf(){ const f = finDados(); return { nome: f.profissional, registro: f.registro, doc: f.documento }; }
+function docErro(){
+  const p = pacienteDe(DOC.pac);
+  if(!p) return 'Selecione o paciente.';
+  if(DOC.tipo === 'recibo' && !(num(docVal(docCampos('recibo')[1])) > 0)) return 'Informe o valor do recibo.';
+  if(DOC.tipo === 'substituicao' && !planosDoc(p).length) return 'Este paciente ainda não tem prescrição. Crie uma na aba Prescrição.';
+  return '';
+}
+function planosDoc(p){ return ((p && p.presc) || []).slice().sort((a,b) => a.data < b.data ? 1 : -1); }
+/* troca por equivalência de energia: mesma kcal do alimento original, em gramas arredondadas a 5 g */
+function equivalente(it, subKey){
+  const orig = nutrientes(it.key, it.qtd), sub = MAPA.get(subKey);
+  if(!orig || !sub || !sub.k || !(orig.k > 0)) return null;
+  const g = Math.round(orig.k / sub.k * 100 / 5) * 5;
+  return { g, n: nutrientes(subKey, g) };
+}
+
+function docCabecalho(){
+  const f = docProf();
+  return `<div style="border-bottom:2px solid #7a1f3d;padding-bottom:6px;margin-bottom:12px">
+    <b style="font-size:14px">${esc(f.nome || 'Nutricionista')}</b>${f.registro ? ' · ' + esc(f.registro) : ''}${f.doc ? ' · ' + esc(f.doc) : ''}</div>`;
+}
+function docAssinaturas(paciente){
+  const f = docProf();
+  return `<div class="assin" style="margin-top:48px">
+    ${paciente ? `<div>______________________________<br>${esc(paciente.nome)}</div>` : ''}
+    <div>______________________________<br>${esc(f.nome || 'Nutricionista')}${f.registro ? '<br>' + esc(f.registro) : ''}</div></div>`;
+}
+function docHtml(){
+  const erro = docErro();
+  if(erro) return `<p class="muted">${esc(erro)}</p>`;
+  const p = pacienteDe(DOC.pac);
+  const cs = Object.fromEntries(docCampos(DOC.tipo).map(c => [c.id, docVal(c)]));
+  const ident = `<b>${esc(p.nome)}</b>${p.cpf ? ', CPF ' + esc(p.cpf) : ''}`;
+  if(DOC.tipo === 'recibo'){
+    const valor = num(cs.valor);
+    return `${docCabecalho()}<h1>Recibo</h1>
+      <p style="${DOC_P}">Recebi de ${ident} a importância de <b>R$ ${fmt(valor, 2)}</b> (${esc(valorPorExtenso(valor))}), referente a ${esc(cs.descricao)}, em ${fmtData(cs.data)}, na forma de pagamento: ${esc(cs.forma)}.</p>
+      ${docAssinaturas(null)}`;
+  }
+  if(DOC.tipo === 'declaracao'){
+    return `${docCabecalho()}<h1>Declaração de comparecimento</h1>
+      <p style="${DOC_P}">Declaro, para fins de ${esc(cs.finalidade)}, que ${ident} compareceu a consulta de nutrição nesta clínica em ${fmtData(cs.data)}, no horário das ${esc(cs.inicio)} às ${esc(cs.fim)}.</p>
+      ${docAssinaturas(null)}`;
+  }
+  if(DOC.tipo === 'atestado'){
+    const desde = cs.desde ? `desde ${fmtData(cs.desde)}, ` : '';
+    return `${docCabecalho()}<h1>Atestado de acompanhamento nutricional</h1>
+      <p style="${DOC_P}">Atesto, para ${esc(cs.finalidade)}, que ${ident} encontra-se em acompanhamento nutricional nesta clínica ${desde}com consultas periódicas.</p>
+      <p style="${DOC_P}">Por sigilo profissional, este atestado não contém informações clínicas.</p>
+      <p style="${DOC_P}">Emitido em ${fmtData(cs.emissao)}.</p>
+      ${docAssinaturas(null)}`;
+  }
+  if(DOC.tipo === 'consentimento'){
+    const x = b => b ? '[x]' : '[ ]';
+    return `${docCabecalho()}<h1>Termo de consentimento</h1>
+      <p style="${DOC_P}">Eu, ${ident}, declaro que fui informado(a) sobre o atendimento de nutrição. Meus dados pessoais e de saúde serão usados somente para o atendimento e ficarão registrados em prontuário, conforme a Lei Geral de Proteção de Dados (Lei nº 13.709/2018).</p>
+      <p style="${DOC_P}"><b>Uso de imagem e contato</b> (marque o que autoriza):</p>
+      <p style="${DOC_P};margin-left:8px">${x(cs.fotoProntuario)} ${esc(docCampos('consentimento')[1].rot)}<br>
+        ${x(cs.fotoEducativo)} ${esc(docCampos('consentimento')[2].rot)}<br>
+        ${x(cs.fotoIdentificado)} ${esc(docCampos('consentimento')[3].rot)}<br>
+        ${x(cs.whatsapp)} ${esc(docCampos('consentimento')[4].rot)}</p>
+      <p style="${DOC_P}">Data: ${fmtData(cs.data)}</p>
+      ${docAssinaturas(p)}`;
+  }
+  if(DOC.tipo === 'substituicao'){
+    const pr = planosDoc(p).find(x => x.id === DOC.plano) || planosDoc(p)[0];
+    const corpo = pr.refeicoes.map(r => `<h3>${esc(r.nome)}${r.hora ? ' · ' + esc(r.hora) : ''}</h3>
+      <table class="info" style="width:100%"><thead><tr><th style="text-align:left">Alimento</th><th class="num">Quantidade</th><th style="text-align:left">Pode ser trocado por</th></tr></thead><tbody>
+      ${r.itens.map(it => {
+        const x = MAPA.get(it.key);
+        const trocas = (it.subs || []).map(k => { const s = MAPA.get(k), eq = equivalente(it, k); return s && eq ? `${esc(s.nome)}: ${fmt(eq.g, 0)} g` : null; }).filter(Boolean);
+        return `<tr><td>${x ? esc(x.nome) : '(alimento removido da base)'}</td><td class="num">${fmt(it.qtd, 0)} g</td><td>${trocas.length ? trocas.join('<br>') : '—'}</td></tr>`;
+      }).join('') || '<tr><td colspan="3" class="muted">Sem alimentos nesta refeição</td></tr>'}
+      </tbody></table>`).join('');
+    return `${docCabecalho()}<h1>Lista de substituição de alimentos</h1>
+      <p style="${DOC_P}">Paciente: ${ident}<br>Plano alimentar: ${esc(pr.titulo)} · ${fmtData(pr.data)}</p>
+      ${corpo}
+      <p class="rodape">As trocas são calculadas pela mesma energia (kcal) do alimento original; os macronutrientes podem variar um pouco. Em caso de dúvida, consulte a nutricionista antes de fazer trocas maiores. Composição dos alimentos: TACO, 4ª edição ampliada e revisada; TBCA para itens ausentes na TACO.</p>`;
+  }
+  return '';
+}
+function atualizarDoc(){ const el = document.getElementById('docPrev'); if(el) el.innerHTML = docHtml(); }
+function imprimirDoc(){
+  const erro = docErro(); if(erro){ alert(erro); return; }
+  const p = pacienteDe(DOC.pac);
+  document.getElementById('printArea').innerHTML = docHtml();
+  const titulo = document.title;
+  document.title = `${DOC_TIPOS.find(t => t[0] === DOC.tipo)[1]} · ${p.nome}`;
+  window.addEventListener('afterprint', () => { document.title = titulo; }, { once:true });
+  window.print();
+}
+function setDoc(campo, valor){
+  DOC[campo] = valor;
+  if(campo === 'pac'){ DOC.plano = ''; }
+  if(campo === 'tipo'){ DOC.plano = ''; }
+  rDocs();
+}
+function docLer(el){
+  DOC.val[el.dataset.doc] = el.type === 'checkbox' ? el.checked : el.value;
+  atualizarDoc();
+}
+function campoDoc(c){
+  const k = DOC.tipo + '.' + c.id, val = docVal(c);
+  if(c.t === 'check') return `<label style="flex-direction:row;align-items:center;gap:8px;grid-column:1/-1"><input type="checkbox" data-doc="${k}" ${val ? 'checked' : ''} style="width:auto" onchange="docLer(this)"> ${esc(c.rot)}</label>`;
+  if(c.t === 'select') return `<label>${esc(c.rot)}<select data-doc="${k}" onchange="docLer(this)">${c.opts.map(o => `<option ${o === val ? 'selected' : ''}>${o}</option>`).join('')}</select></label>`;
+  return `<label ${c.larga ? 'style="grid-column:span 2"' : ''}>${esc(c.rot)}<input type="${c.t}" data-doc="${k}" value="${esc(val)}" oninput="docLer(this)"></label>`;
+}
+function linhaSub(r, it, ii){
+  const x = MAPA.get(it.key), n = nutrientes(it.key, it.qtd) || { k:0 };
+  const trocas = (it.subs || []).map(k => {
+    const s = MAPA.get(k), eq = equivalente(it, k);
+    return `<span class="tag">${s ? esc(s.nome) : '(removido)'}${eq ? ' · ' + fmt(eq.g, 0) + ' g' : ''} <a href="#" onclick="remSub('${r.id}',${ii},'${k}');return false;" style="color:inherit;text-decoration:none">×</a></span>`;
+  }).join(' ');
+  return `<div style="padding:6px 0;border-bottom:1px dashed var(--line)">
+    <div><b>${esc(x ? x.nome : '(alimento removido da base)')}</b> <span class="muted">${fmt(it.qtd, 0)} g · ${fmt(n.k, 0)} kcal</span></div>
+    <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">${trocas || '<span class="muted" style="font-size:12px">sem trocas cadastradas</span>'}</div>
+    <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+      <input list="dl-alim" id="ds_${r.id}_${ii}" placeholder="Adicionar troca: digite e escolha na lista" style="flex:1 1 280px">
+      <button class="btn sec mini" onclick="addSub('${r.id}',${ii})">Adicionar troca</button></div>
+  </div>`;
+}
+function editorSubs(p){
+  const planos = planosDoc(p);
+  if(!planos.length) return '<p class="muted">Este paciente ainda não tem prescrição. Crie uma na aba Prescrição.</p>';
+  const pr = planos.find(x => x.id === DOC.plano) || planos[0];
+  DOC.plano = pr.id;
+  return `<label>Plano alimentar<select onchange="setDoc('plano', this.value)">${planos.map(x => `<option value="${x.id}" ${x.id === pr.id ? 'selected' : ''}>${esc(x.titulo)} · ${fmtData(x.data)}</option>`).join('')}</select></label>
+    <div style="margin-top:10px">${pr.refeicoes.map(r => `<div style="border-top:1px solid var(--line);padding:8px 0"><b>${esc(r.nome)}</b>
+      ${r.itens.map((it, ii) => linhaSub(r, it, ii)).join('') || '<div class="muted">Sem alimentos.</div>'}</div>`).join('')}</div>`;
+}
+function addSub(rid, ii){
+  const p = pacienteDe(DOC.pac), pr = p && planosDoc(p).find(x => x.id === DOC.plano);
+  const r = pr && pr.refeicoes.find(x => x.id === rid), it = r && r.itens[ii];
+  if(!it) return;
+  const k = ROTULO.get(v('ds_' + rid + '_' + ii));
+  if(!k){ alert('Escolha um alimento na lista de sugestões (digite parte do nome e selecione a opção).'); return; }
+  if(k === it.key){ alert('A troca precisa ser um alimento diferente do original.'); return; }
+  if(!equivalente(it, k)){ alert('Este alimento não tem valor energético na base; não é possível calcular a troca.'); return; }
+  it.subs = (it.subs || []).filter(x => x !== k).concat([k]);
+  salvar(); rDocs();
+}
+function remSub(rid, ii, k){
+  const p = pacienteDe(DOC.pac), pr = p && planosDoc(p).find(x => x.id === DOC.plano);
+  const r = pr && pr.refeicoes.find(x => x.id === rid), it = r && r.itens[ii];
+  if(!it) return;
+  it.subs = (it.subs || []).filter(x => x !== k);
+  salvar(); rDocs();
+}
+function rDocs(){
+  const el = document.getElementById('tab-documentos');
+  if(!DOC.iniciado){ DOC.pac = DB.ativo || ''; DOC.iniciado = true; }
+  const pacs = DB.pacientes.slice().sort((a,b) => a.nome.localeCompare(b.nome,'pt-BR'));
+  const prof = docProf();
+  const avisoProf = (prof.nome && prof.registro) ? '' :
+    `<div class="aviso">Preencha profissional e CRN em <b>Financeiro › Configuração financeira</b> para aparecerem nos documentos.</div>`;
+  const campos = DOC.tipo === 'substituicao'
+    ? `<div style="margin-top:12px">${editorSubs(pacienteDe(DOC.pac))}</div>`
+    : `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-top:12px">${docCampos(DOC.tipo).map(campoDoc).join('')}</div>`;
+  el.innerHTML = `
+  <div class="card"><h2>Documentos prontos</h2>
+    ${avisoProf}
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+      <label>Paciente<select onchange="setDoc('pac', this.value)"><option value="">— selecione —</option>${pacs.map(p => `<option value="${p.id}" ${p.id === DOC.pac ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></label>
+      <label>Documento<select onchange="setDoc('tipo', this.value)">${DOC_TIPOS.map(([k, n]) => `<option value="${k}" ${k === DOC.tipo ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+    </div>
+    ${campos}
+  </div>
+  <div class="card">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <h2 style="margin:0">Pré-visualização</h2>
+      <button class="btn" onclick="imprimirDoc()">Imprimir</button>
+    </div>
+    <div id="docPrev" class="pl" style="margin-top:12px;border:1px solid var(--line);border-radius:8px;padding:18px;background:#fff"></div>
+  </div>`;
+  atualizarDoc();
+}
+
+/* ---------- gráficos de evolução (peso, IMC e %G) ---------- */
+function tempoDe(iso){ return new Date(iso + 'T12:00:00').getTime(); }
+function linhaSvg(titulo, serie, unidade, t0, t1){
+  if(serie.length < 2) return `<div><b>${titulo}</b><p class="muted" style="font-size:12px">Dados insuficientes: precisa de duas ou mais avaliações com este dado.</p></div>`;
+  const W = 360, H = 170, P = 34;
+  const ys = serie.map(s => s[1]), ymin = Math.min(...ys), ymax = Math.max(...ys), span = (ymax - ymin) || Math.max(1, ymax * 0.1);
+  const lo = ymin - span * 0.2, hi = ymax + span * 0.2;
+  const X = d => t1 > t0 ? P + (tempoDe(d) - t0) / (t1 - t0) * (W - 2 * P) : W / 2;
+  const Y = y => H - P - (y - lo) / (hi - lo) * (H - 2 * P);
+  const pts = serie.map(s => `${X(s[0]).toFixed(1)},${Y(s[1]).toFixed(1)}`).join(' ');
+  return `<div><b>${titulo}</b>
+    <svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(titulo)}" style="max-width:${W}px;display:block">
+      <line x1="${P}" y1="${H - P}" x2="${W - P}" y2="${H - P}" stroke="#ccc"/>
+      <polyline points="${pts}" fill="none" stroke="var(--brand)" stroke-width="2"/>
+      ${serie.map(s => `<circle cx="${X(s[0]).toFixed(1)}" cy="${Y(s[1]).toFixed(1)}" r="3.5" fill="var(--brand)"><title>${fmtData(s[0])}: ${fmt(s[1])} ${unidade}</title></circle>
+        <text x="${X(s[0]).toFixed(1)}" y="${(Y(s[1]) - 7).toFixed(1)}" font-size="10" text-anchor="middle" fill="#333">${fmt(s[1])}</text>
+        <text x="${X(s[0]).toFixed(1)}" y="${H - P + 14}" font-size="9" text-anchor="middle" fill="#777">${fmtData(s[0]).slice(0, 5)}</text>`).join('')}
+    </svg></div>`;
+}
+function graficoEvolucao(p){
+  const pts = (p.antro || []).map(a => {
+    let gc = null; try { gc = calcAntro(a, p).gc; } catch(e) {}
+    return { data:a.data, peso:a.peso, imc:a.peso / ((a.altura / 100) ** 2), gc };
+  }).sort((x, y) => x.data < y.data ? -1 : 1);
+  if(pts.length < 2) return `<div class="card"><h2>Evolução ao longo do tempo</h2><p class="muted">Registre ao menos duas avaliações para ver a evolução de peso, IMC e %G.</p></div>`;
+  const t0 = tempoDe(pts[0].data), t1 = tempoDe(pts[pts.length - 1].data);
+  return `<div class="card"><h2>Evolução ao longo do tempo</h2>
+    <p class="muted" style="font-size:12px;margin:0 0 8px">O eixo horizontal é proporcional às datas das avaliações.</p>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+      ${linhaSvg('Peso (kg)', pts.map(q => [q.data, q.peso]), 'kg', t0, t1)}
+      ${linhaSvg('IMC (kg/m²)', pts.map(q => [q.data, q.imc]), 'kg/m²', t0, t1)}
+      ${linhaSvg('Gordura corporal (%G)', pts.filter(q => q.gc != null).map(q => [q.data, q.gc]), '%', t0, t1)}
+    </div></div>`;
+}
+
+/* ---------- preparações (fichas técnicas) ---------- */
+let RC = { id:null, nome:'', porc:'', pesoFinal:'', modo:'', ingr:[] };
+function receitasDB(){ if(!DB.receitas) DB.receitas = []; return DB.receitas; }
+// valores da preparação pronta: total, peso e valores por 100 g
+function receitaValores(r){
+  const tot = { k:0, p:0, l:0, c:0, f:0, col:0, ca:0, mg:0 };
+  let cru = 0;
+  for(const ing of r.ingredientes){
+    cru += ing.qtd;
+    const n = nutrientes(ing.key, ing.qtd);
+    if(n) for(const x of Object.keys(tot)) tot[x] += n[x];
+  }
+  const peso = (r.pesoFinal > 0 ? r.pesoFinal : cru) || 1;
+  const por100 = {};
+  for(const x of Object.keys(tot)) por100[x] = tot[x] * 100 / peso;
+  return { tot, peso, por100, cru };
+}
+function receitasAlim(){
+  return receitasDB().filter(r => r.ingredientes && r.ingredientes.length)
+    .map(r => Object.assign({ key:'REC:' + r.id, src:'Preparação', cod:r.id, nome:r.nome }, receitaValores(r).por100));
+}
+function novaPrep(){ RC = { id:null, nome:'', porc:'', pesoFinal:'', modo:'', ingr:[] }; rPrep(); }
+function lerRC(){
+  if(!document.getElementById('rNome')) return;
+  RC.nome = v('rNome'); RC.porc = v('rPorc'); RC.pesoFinal = v('rPeso');
+  RC.modo = document.getElementById('rModo').value;
+}
+function addIngr(){
+  lerRC();
+  const k = ROTULO.get(v('rIng'));
+  if(!k){ alert('Escolha um alimento na lista de sugestões (digite parte do nome e selecione a opção).'); return; }
+  if(k.startsWith('REC:')){ alert('Uma preparação não pode ser ingrediente de outra. Use os alimentos da base.'); return; }
+  const q = num(v('rIngQ'));
+  if(!(q > 0)){ alert('Informe a quantidade do ingrediente em gramas.'); return; }
+  RC.ingr.push({ key:k, qtd:q }); rPrep();
+}
+function removerIngr(i){ lerRC(); RC.ingr.splice(i, 1); rPrep(); }
+function salvarPrep(){
+  lerRC();
+  if(!RC.nome){ alert('Informe o nome da preparação.'); return; }
+  if(!RC.ingr.length){ alert('Adicione pelo menos um ingrediente.'); return; }
+  const obj = { id: RC.id || uid(), nome: RC.nome, porc: num(RC.porc) || 1, pesoFinal: num(RC.pesoFinal) || null,
+    ingredientes: RC.ingr.map(x => ({ key:x.key, qtd:x.qtd })), modo: RC.modo };
+  const lista = receitasDB(), i = lista.findIndex(x => x.id === obj.id);
+  if(i >= 0) lista[i] = obj; else lista.push(obj);
+  salvar(); montarAlimentos(); novaPrep(); rAlim();
+}
+function editarPrep(id){
+  const r = receitasDB().find(x => x.id === id); if(!r) return;
+  RC = { id:r.id, nome:r.nome, porc:r.porc || '', pesoFinal:r.pesoFinal || '', modo:r.modo || '', ingr:r.ingredientes.map(x => ({ key:x.key, qtd:x.qtd })) };
+  rAlim();
+  const el = document.getElementById('tab-prep'); if(el) el.scrollIntoView({ block:'start' });
+}
+function excluirPrep(id){
+  if(!confirm('Excluir esta preparação? Prescrições que a usam mostrarão "alimento removido".')) return;
+  DB.receitas = receitasDB().filter(x => x.id !== id);
+  if(RC.id === id) RC = { id:null, nome:'', porc:'', pesoFinal:'', modo:'', ingr:[] };
+  salvar(); montarAlimentos(); rAlim();
+}
+function imprimirArea(html, titulo){
+  document.getElementById('printArea').innerHTML = html;
+  const antigo = document.title; document.title = titulo;
+  window.addEventListener('afterprint', () => { document.title = antigo; }, { once:true });
+  window.print();
+}
+function imprimirPrep(id){
+  const r = receitasDB().find(x => x.id === id); if(!r) return;
+  const { tot, cru } = receitaValores(r), porc = r.porc || 1;
+  const linhas = r.ingredientes.map(ing => {
+    const x = MAPA.get(ing.key), n = nutrientes(ing.key, ing.qtd) || { k:0 };
+    return `<tr><td>${x ? esc(x.nome) : '(alimento removido da base)'}</td><td class="num">${fmt(ing.qtd, 0)} g</td><td class="num">${fmt(n.k, 0)}</td></tr>`;
+  }).join('');
+  imprimirArea(`<h1>${esc(r.nome)}</h1>
+    <p class="muted" style="margin:0 0 6px">Ficha técnica · rendimento: ${fmt(porc, 0)} porção(ões)${r.pesoFinal ? ` · peso final ${fmt(r.pesoFinal, 0)} g` : ''}</p>
+    <h3>Ingredientes</h3>
+    <table><thead><tr><th>Alimento</th><th class="num">Quantidade</th><th class="num">kcal</th></tr></thead><tbody>${linhas}</tbody>
+      <tfoot><tr><th>Total</th><th class="num">${fmt(cru, 0)} g</th><th class="num">${fmt(tot.k, 0)}</th></tr></tfoot></table>
+    <h3>Por porção</h3>
+    <p>Energia ${fmt(tot.k / porc, 0)} kcal · PTN ${fmt(tot.p / porc)} g · LIP ${fmt(tot.l / porc)} g · CHO ${fmt(tot.c / porc)} g · Fibra ${fmt(tot.f / porc)} g</p>
+    ${r.modo ? `<h3>Modo de preparo</h3><div class="txt">${esc(r.modo)}</div>` : ''}
+    <p class="muted rodape">Valores calculados a partir da base de alimentos (TACO, 4ª edição ampliada e revisada; TBCA para itens ausentes na TACO). Emitido em ${fmtData(hoje())}.</p>`,
+    `Ficha técnica · ${r.nome}`);
+}
+function rPrep(){
+  const el = document.getElementById('tab-prep'); if(!el) return;
+  const lista = receitasDB().slice().sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  el.innerHTML = `<div class="card"><h2>${RC.id ? 'Editando preparação' : 'Nova preparação (ficha técnica)'}</h2>
+    <p class="muted" style="font-size:12px">Monte a receita com alimentos da base. Os valores são calculados por 100 g da preparação pronta (ou do peso final, se informado) e a preparação passa a aparecer nas prescrições como qualquer alimento.</p>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-top:10px">
+      <label style="grid-column:span 2">Nome da preparação<input id="rNome" value="${esc(RC.nome)}" placeholder="Ex.: Frango grelhado com legumes"></label>
+      <label>Rendimento (porções)<input id="rPorc" inputmode="decimal" value="${esc(RC.porc)}" placeholder="Ex.: 4"></label>
+      <label>Peso final pronto (g)<input id="rPeso" inputmode="decimal" value="${esc(RC.pesoFinal)}" placeholder="opcional"></label>
+    </div>
+    <div class="row" style="align-items:flex-end;margin-top:12px">
+      <label style="flex:3 1 300px">Ingrediente (digite e escolha)<input list="dl-alim" id="rIng" placeholder="Digite parte do nome"></label>
+      <label style="flex:0 0 130px">Quantidade (g)<input id="rIngQ" inputmode="decimal" value="100"></label>
+      <button class="btn sec" onclick="addIngr()">Adicionar ingrediente</button>
+    </div>
+    ${RC.ingr.length ? `<div style="overflow-x:auto;margin-top:8px"><table><thead><tr><th>Ingrediente</th><th class="num">Quantidade</th><th class="num">kcal</th><th></th></tr></thead><tbody>
+      ${RC.ingr.map((ing, i) => { const x = MAPA.get(ing.key), n = nutrientes(ing.key, ing.qtd) || { k:0 };
+        return `<tr><td>${x ? esc(x.nome) : '(removido)'}</td><td class="num">${fmt(ing.qtd, 0)} g</td><td class="num">${fmt(n.k, 0)}</td><td><button class="btn danger mini" onclick="removerIngr(${i})">Remover</button></td></tr>`; }).join('')}
+      </tbody></table></div>` : '<p class="muted" style="margin-top:8px">Nenhum ingrediente adicionado.</p>'}
+    <label style="margin-top:10px">Modo de preparo<textarea id="rModo">${esc(RC.modo)}</textarea></label>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn" onclick="salvarPrep()">${RC.id ? 'Salvar alterações' : 'Salvar preparação'}</button>
+      ${RC.id ? '<button class="btn sec" onclick="novaPrep()">Cancelar edição</button>' : ''}
+    </div>
+    <h3 style="margin-top:18px">Preparações cadastradas <span class="tag">${lista.length}</span></h3>
+    ${lista.length ? `<div style="overflow-x:auto"><table><thead><tr><th>Preparação</th><th class="num">Porções</th><th class="num">kcal/porção</th><th class="num">PTN/porção</th><th class="num">LIP/porção</th><th class="num">CHO/porção</th><th></th></tr></thead><tbody>
+      ${lista.map(r => { const { tot } = receitaValores(r), porc = r.porc || 1;
+        return `<tr><td><b>${esc(r.nome)}</b></td><td class="num">${fmt(porc, 0)}</td><td class="num">${fmt(tot.k / porc, 0)}</td><td class="num">${fmt(tot.p / porc)}</td><td class="num">${fmt(tot.l / porc)}</td><td class="num">${fmt(tot.c / porc)}</td>
+          <td style="white-space:nowrap"><button class="btn sec mini" onclick="editarPrep('${r.id}')">Editar</button> <button class="btn sec mini" onclick="imprimirPrep('${r.id}')">Imprimir ficha</button> <button class="btn danger mini" onclick="excluirPrep('${r.id}')">Excluir</button></td></tr>`; }).join('')}
+      </tbody></table></div>` : '<p class="muted">Nenhuma preparação cadastrada.</p>'}
+  </div>`;
+}
+
+/* ---------- consumo alimentar: recordatório de 24 h e questionário de frequência ---------- */
+const FREQ_FFQ = [['Diariamente',7],['5 a 6 vezes por semana',5.5],['3 a 4 vezes por semana',3.5],['1 a 2 vezes por semana',1.5],['Raramente ou nunca',0]];
+let CONS = { pac:'', r24:{ data:'', ref:'Almoço', itens:[] }, ffq:{ itens:[] } };
+function consumoDe(p){ if(!p.consumo) p.consumo = { r24:[], ffq:[] }; return p.consumo; }
+function totaisDe(itens){
+  const t = { k:0, p:0, l:0, c:0, f:0 };
+  for(const it of itens){ const n = nutrientes(it.key, it.qtd); if(n) for(const x of Object.keys(t)) t[x] += n[x]; }
+  return t;
+}
+function metaDe(p){
+  const pr = (p.presc || []).slice().sort((a, b) => a.data < b.data ? 1 : -1)[0];
+  if(!pr) return null;
+  try { return metas(pr, p); } catch(e) { return null; }
+}
+function pctMeta(real, meta){ return (meta && meta > 0) ? ` (${fmt(real / meta * 100, 0)}% da meta)` : ''; }
+function consCampo(campo, valor){
+  if(campo === 'data') CONS.r24.data = valor;
+  if(campo === 'ref') CONS.r24.ref = valor;
+  rConsumo();
+}
+function addConsItem(tipo){
+  if(tipo === 'r24'){
+    const k = ROTULO.get(v('rAl')), q = num(v('rQ'));
+    if(!k){ alert('Escolha um alimento na lista de sugestões.'); return; }
+    if(!(q > 0)){ alert('Informe a quantidade em gramas.'); return; }
+    CONS.r24.itens.push({ key:k, qtd:q, ref:CONS.r24.ref });
+  } else {
+    const k = ROTULO.get(v('fAl')), q = num(v('fQ'));
+    const freq = FREQ_FFQ[parseInt(v('fFreq'), 10) || 0];
+    if(!k){ alert('Escolha um alimento na lista de sugestões.'); return; }
+    if(!(q > 0)){ alert('Informe a porção em gramas.'); return; }
+    CONS.ffq.itens.push({ key:k, qtd:q, freqLabel:freq[0], freq:freq[1] });
+  }
+  rConsumo();
+}
+function remConsItem(tipo, i){ (tipo === 'r24' ? CONS.r24.itens : CONS.ffq.itens).splice(i, 1); rConsumo(); }
+function salvarR24(){
+  const p = pac(); if(!p) return;
+  if(!CONS.r24.itens.length){ alert('Adicione ao menos um alimento.'); return; }
+  consumoDe(p).r24.push({ id:uid(), data:CONS.r24.data || hoje(), itens:CONS.r24.itens.map(x => ({ key:x.key, qtd:x.qtd, ref:x.ref })) });
+  CONS.r24 = { data:hoje(), ref:'Almoço', itens:[] };
+  salvar(); rConsumo();
+}
+function salvarFFQ(){
+  const p = pac(); if(!p) return;
+  if(!CONS.ffq.itens.length){ alert('Adicione ao menos um alimento.'); return; }
+  consumoDe(p).ffq.push({ id:uid(), data:hoje(), itens:CONS.ffq.itens.map(x => ({ key:x.key, qtd:x.qtd, freq:x.freq, freqLabel:x.freqLabel })) });
+  CONS.ffq = { itens:[] };
+  salvar(); rConsumo();
+}
+function excluirConsumo(tipo, id){
+  if(!confirm('Excluir este registro?')) return;
+  const c = consumoDe(pac()); c[tipo] = c[tipo].filter(x => x.id !== id); salvar(); rConsumo();
+}
+function rConsumo(){
+  const el = document.getElementById('tab-consumo'), p = pac();
+  if(!p){ el.innerHTML = semPaciente(); return; }
+  if(CONS.pac !== p.id){ CONS = { pac:p.id, r24:{ data:hoje(), ref:'Almoço', itens:[] }, ffq:{ itens:[] } }; }
+  const c = consumoDe(p), meta = metaDe(p), mv = meta ? meta.vet : null;
+  const r = CONS.r24, tr = totaisDe(r.itens);
+  const alvo = { k: mv, p: meta ? meta.ptn : null, l: meta ? meta.lip : null, c: meta ? meta.cho : null };
+  const linhaTot = (t, m) => `<b>${fmt(t.k, 0)} kcal</b>${pctMeta(t.k, m.k)} · PTN ${fmt(t.p)} g${pctMeta(t.p, m.p)} · LIP ${fmt(t.l)} g${pctMeta(t.l, m.l)} · CHO ${fmt(t.c)} g${pctMeta(t.c, m.c)} · Fibra ${fmt(t.f)} g`;
+  const fq = CONS.ffq, tf = totaisDe(fq.itens.map(it => ({ key:it.key, qtd:it.qtd * it.freq / 7 })));
+  const hist = c.r24.slice().sort((a, b) => a.data < b.data ? 1 : -1);
+  const histF = c.ffq.slice().sort((a, b) => a.data < b.data ? 1 : -1);
+  el.innerHTML = `
+  <div class="card"><h2>Recordatório de 24 horas · ${esc(p.nome)}</h2>
+    <p class="muted" style="font-size:12px;margin:0 0 8px">Registre tudo o que foi consumido no dia anterior. ${meta ? 'A comparação usa a meta da prescrição mais recente.' : 'Crie uma prescrição para comparar com a meta.'}</p>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));align-items:end">
+      <label>Data<input type="date" value="${r.data}" onchange="consCampo('data', this.value)"></label>
+      <label>Refeição<select onchange="consCampo('ref', this.value)">${REFEICOES_PADRAO.map(x => `<option ${x === r.ref ? 'selected' : ''}>${x}</option>`).join('')}</select></label>
+      <label style="grid-column:span 2">Alimento (digite e escolha)<input list="dl-alim" id="rAl" placeholder="Digite parte do nome"></label>
+      <label>Quantidade (g)<input id="rQ" inputmode="decimal" value="100"></label>
+      <div><button class="btn sec" onclick="addConsItem('r24')">Adicionar</button></div>
+    </div>
+    ${r.itens.length ? `<div style="overflow-x:auto;margin-top:10px"><table><thead><tr><th>Refeição</th><th>Alimento</th><th class="num">Quantidade</th><th class="num">kcal</th><th></th></tr></thead><tbody>
+      ${r.itens.map((it, i) => { const x = MAPA.get(it.key), n = nutrientes(it.key, it.qtd) || { k:0 };
+        return `<tr><td>${esc(it.ref)}</td><td>${x ? esc(x.nome) : '(removido)'}</td><td class="num">${fmt(it.qtd, 0)} g</td><td class="num">${fmt(n.k, 0)}</td><td><button class="btn danger mini" onclick="remConsItem('r24',${i})">Remover</button></td></tr>`; }).join('')}
+      </tbody></table></div>
+      <p style="margin-top:10px">Total do dia: ${linhaTot(tr, alvo)}</p>
+      <div style="display:flex;gap:8px;margin-top:8px"><button class="btn" onclick="salvarR24()">Salvar recordatório</button>
+        <button class="btn sec" onclick="CONS.r24.itens=[];rConsumo()">Limpar</button></div>`
+      : '<p class="muted" style="margin-top:8px">Nenhum alimento adicionado.</p>'}
+    ${hist.length ? `<h3 style="margin-top:16px">Recordatórios salvos</h3>${hist.map(h => { const t = totaisDe(h.itens);
+      return `<div style="border-top:1px solid var(--line);padding:8px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b>${fmtData(h.data)}</b>
+        <span class="muted">${h.itens.length} alimento(s) · ${fmt(t.k, 0)} kcal${pctMeta(t.k, alvo.k)}</span>
+        <button class="btn danger mini" style="margin-left:auto" onclick="excluirConsumo('r24','${h.id}')">Excluir</button></div>`; }).join('')}` : ''}
+  </div>
+
+  <div class="card"><h2>Questionário de frequência alimentar</h2>
+    <p class="muted" style="font-size:12px;margin:0 0 8px">Para cada alimento, informe a porção habitual e a frequência. O consumo diário médio considera a frequência semanal (ex.: 1 a 2 vezes por semana = 1,5 vez).</p>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));align-items:end">
+      <label style="grid-column:span 2">Alimento (digite e escolha)<input list="dl-alim" id="fAl" placeholder="Digite parte do nome"></label>
+      <label>Porção habitual (g)<input id="fQ" inputmode="decimal" value="100"></label>
+      <label>Frequência<select id="fFreq">${FREQ_FFQ.map(([l], i) => `<option value="${i}">${l}</option>`).join('')}</select></label>
+      <div><button class="btn sec" onclick="addConsItem('ffq')">Adicionar</button></div>
+    </div>
+    ${fq.itens.length ? `<div style="overflow-x:auto;margin-top:10px"><table><thead><tr><th>Alimento</th><th class="num">Porção</th><th>Frequência</th><th class="num">kcal/dia (média)</th><th></th></tr></thead><tbody>
+      ${fq.itens.map((it, i) => { const x = MAPA.get(it.key), n = nutrientes(it.key, it.qtd * it.freq / 7) || { k:0 };
+        return `<tr><td>${x ? esc(x.nome) : '(removido)'}</td><td class="num">${fmt(it.qtd, 0)} g</td><td>${esc(it.freqLabel)}</td><td class="num">${fmt(n.k, 0)}</td><td><button class="btn danger mini" onclick="remConsItem('ffq',${i})">Remover</button></td></tr>`; }).join('')}
+      </tbody></table></div>
+      <p style="margin-top:10px">Média diária: ${linhaTot(tf, alvo)}</p>
+      <div style="margin-top:8px"><button class="btn" onclick="salvarFFQ()">Salvar questionário</button></div>`
+      : '<p class="muted" style="margin-top:8px">Nenhum alimento adicionado.</p>'}
+    ${histF.length ? `<h3 style="margin-top:16px">Questionários salvos</h3>${histF.map(h => { const t = totaisDe(h.itens.map(it => ({ key:it.key, qtd:it.qtd * it.freq / 7 })));
+      return `<div style="border-top:1px solid var(--line);padding:8px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b>${fmtData(h.data)}</b>
+        <span class="muted">${h.itens.length} alimento(s) · média ${fmt(t.k, 0)} kcal/dia${pctMeta(t.k, alvo.k)}</span>
+        <button class="btn danger mini" style="margin-left:auto" onclick="excluirConsumo('ffq','${h.id}')">Excluir</button></div>`; }).join('')}` : ''}
+  </div>`;
+}
+
+/* ---------- anamnese: modelos ---------- */
+const MODELOS_ANAM = {
+  adulto: { nome:'Adulto', campos:{
+    hist:'Doenças prévias (hipertensão, diabetes, dislipidemia, doenças gastrointestinais, renais ou cardíacas):\n',
+    med:'Medicamentos em uso (nome, dose e horário) e suplementos:\n',
+    alerg:'Alergias e intolerâncias alimentares (incluindo lactose e glúten):\n',
+    hab:'Número de refeições por dia e horários; quem prepara as refeições; consumo de água e de bebidas açucaradas:\n',
+    ativ:'Atividade física (tipo, frequência e duração); horas de sono; tabagismo; consumo de álcool:\n',
+    exam:'Exames recentes (data e principais resultados):\n' } },
+  idoso: { nome:'Idoso (60 anos ou mais)', campos:{
+    hist:'Quedas, fraturas, perda de peso não intencional, doenças prévias e internações:\n',
+    med:'Medicamentos em uso (inclui interações com alimentos):\n',
+    alerg:'Alergias e intolerâncias alimentares; restrições prescritas:\n',
+    hab:'Apetite; mastigação e deglutição (uso de prótese dentária); quem faz as compras e prepara as refeições:\n',
+    ativ:'Atividade física; sono; humor; vida social:\n',
+    exam:'Exames recentes (albumina, hemoglobina, vitamina D, colesterol, glicemia):\n' } },
+  gestante: { nome:'Gestante', campos:{
+    hist:'DPP, idade gestacional atual, gestações anteriores e intercorrências:\n',
+    med:'Medicamentos e suplementos em uso (ácido fólico, ferro, vitaminas):\n',
+    alerg:'Alergias e intolerâncias alimentares; aversões e náuseas:\n',
+    hab:'Náuseas e vômitos, apetite, horários das refeições, consumo de água e cafeína, alimentos crus ou malcozidos:\n',
+    ativ:'Atividade física adaptada à gestação; sono; tabagismo; álcool:\n',
+    exam:'Exames recentes (hemoglobina, glicemia, urina e sorologias do pré-natal):\n' } },
+  crianca: { nome:'Criança ou adolescente', campos:{
+    hist:'Nascimento (idade gestacional e peso ao nascer), aleitamento materno e doenças prévias:\n',
+    med:'Medicamentos e suplementos em uso:\n',
+    alerg:'Alergias e intolerâncias alimentares (incluindo leite de vaca e glúten):\n',
+    hab:'Introdução alimentar; seletividade alimentar; rotina das refeições na escola e em casa; quem alimenta a criança:\n',
+    ativ:'Atividade física, tempo de tela e sono:\n',
+    exam:'Exames recentes e vacinação:\n' } }
+};
+function aplicarModelo(){
+  const m = MODELOS_ANAM[v('fModelo')]; if(!m) return;
+  let n = 0;
+  for(const [k, txt] of Object.entries(m.campos)){
+    const el = document.getElementById('f' + k[0].toUpperCase() + k.slice(1));
+    if(el && !el.value.trim()){ el.value = txt; n++; }
+  }
+  document.getElementById('fSalvo').textContent = n
+    ? `Modelo aplicado a ${n} campo(s). Confira e clique em Salvar ficha.`
+    : 'Todos os campos já têm conteúdo; nada foi alterado.';
+}
+
+/* ---------- CID-10: lista de referência para nutrição (conferir na CID-10 oficial) ---------- */
+const CID_LISTA = [
+  ['E40','Kwashiorkor'], ['E41','Marasmo nutricional'], ['E43','Desnutrição proteico-calórica grave'],
+  ['E44.0','Desnutrição proteico-calórica moderada'], ['E44.1','Desnutrição proteico-calórica leve'],
+  ['E46','Desnutrição proteico-calórica não especificada'], ['E63.9','Deficiência nutricional não especificada'],
+  ['E66.0','Obesidade devida a excesso de calorias'], ['E66.9','Obesidade não especificada'],
+  ['E78.0','Hipercolesterolemia pura'], ['E78.2','Hiperlipidemia mista'], ['E78.5','Hiperlipidemia não especificada'],
+  ['E10.9','Diabetes mellitus insulino-dependente sem complicações'], ['E11.9','Diabetes mellitus não-insulino-dependente sem complicações'],
+  ['E53.8','Deficiência de outras vitaminas especificadas do grupo B'], ['E55.9','Deficiência não especificada de vitamina D'],
+  ['D50.9','Anemia por deficiência de ferro não especificada'], ['D51.9','Anemia por deficiência de vitamina B12 não especificada'],
+  ['D52.9','Anemia por deficiência de folato não especificada'], ['I10','Hipertensão essencial (primária)'],
+  ['K21.9','Doença de refluxo gastroesofágico sem esofagite'], ['K58.9','Síndrome do intestino irritável sem diarreia'],
+  ['K59.0','Constipação'], ['K76.0','Degeneração gordurosa do fígado não classificada em outra parte (DHGNA / esteatose)'],
+  ['N18.9','Insuficiência renal crônica não especificada'], ['R63.3','Dificuldades de alimentação e erros na administração de alimentos'],
+  ['R63.4','Perda de peso anormal'], ['R63.5','Ganho de peso anormal'], ['Z71.3','Aconselhamento e supervisão dietéticos']
+];
+function cidOpcoes(){ return CID_LISTA.map(([c, d]) => `<option value="${c} · ${esc(d)}"></option>`).join(''); }
+
 function rBackup(){
   document.getElementById('tab-backup').innerHTML = `
   <div class="card"><h2>Backup e transferência</h2>
@@ -1601,7 +2791,7 @@ function render(){
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === TAB));
   document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hide', s.id !== 'tab-' + TAB));
   renderBarra();
-  ({inicio:rInicio, pacientes:rPacientes, agenda:rAgenda, antropometria:rAntro, energia:rEnergia, prontuario:rPront, exames:rExames, fotos:rFotos, prescricao:rPresc, alimentos:rAlim, backup:rBackup})[TAB]();
+  ({inicio:rInicio, pacientes:rPacientes, agenda:rAgenda, antropometria:rAntro, energia:rEnergia, prontuario:rPront, exames:rExames, fotos:rFotos, prescricao:rPresc, alimentos:rAlim, financeiro:rFin, documentos:rDocs, consumo:rConsumo, backup:rBackup})[TAB]();
 }
 document.getElementById('nav').addEventListener('click', e => {
   const b = e.target.closest('button[data-tab]');
