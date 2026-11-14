@@ -1603,7 +1603,11 @@ function excluirExame(id){ if(!confirm('Excluir este resultado?')) return; const
 /* Atenção clínica: pontos de corte de triagem (não substituem a avaliação médica).
    Glicemia e HbA1c: SBD. Lipídios: Atualização da Diretriz Brasileira de Dislipidemias (2017).
    Sódio e potássio: faixas usuais de laboratório. Vitamina D: SBEM/SBPC-ML. Ferritina: depleção de ferro.
-   Hemoglobina: OMS (anemia). TSH: faixa usual 0,4–4,5 mUI/L. */
+   Hemoglobina: OMS (anemia). TSH: faixa usual 0,4–4,5 mUI/L. Creatinina: faixas usuais de laboratório para adultos
+   (H 0,7–1,3 e M 0,6–1,1 mg/dL); ≥ 2,0 mg/dL indica possível comprometimento da função renal.
+   Demais (faixas usuais de laboratório, adultos): ureia, ácido úrico, TGO/TGP, GGT, albumina, proteínas totais,
+   hematócrito, ferro sérico, ácido fólico, fósforo, magnésio e PCR. Resultado fora da referência do laboratório
+   informada também gera atenção. */
 function alertaExame(e, p){
   const nome = norm(e.exame || ''), un = norm(e.unidade || ''), x0 = num(e.valor);
   if(x0 == null) return null;
@@ -1649,6 +1653,11 @@ function alertaExame(e, p){
     if(x0 < 8.5) add('atencao', 'Cálcio abaixo de 8,5 mg/dL');
     else if(x0 > 10.5) add('atencao', 'Cálcio acima de 10,5 mg/dL');
   }
+  if(/creatinina/.test(nome)){
+    const x = un.includes('mol') ? x0 / 88.4 : x0;
+    if(x >= 2.0) add('alerta', 'Creatinina ≥ 2,0 mg/dL (possível comprometimento da função renal)');
+    else if(x > (hom ? 1.3 : 1.1)) add('atencao', 'Creatinina acima da referência (> ' + (hom ? '1,3' : '1,1') + ' mg/dL)');
+  }
   if(/ferritina/.test(nome) && x0 < 30) add('atencao', 'Depleção de ferro (ferritina < 30 ng/mL)');
   if(/vitamina d|25.?hidroxi|25 ?\(oh\)/.test(nome)){
     const x = un.includes('nmol') ? x0 / 2.5 : x0;
@@ -1660,6 +1669,49 @@ function alertaExame(e, p){
     const x = x0 > 25 ? x0 / 10 : x0;
     if(x < (hom ? 13 : 12)) add('atencao', 'Anemia (OMS: < ' + (hom ? '13' : '12') + ' g/dL)');
   }
+  /* demais exames da lista de sugestões */
+  if(/ureia/.test(nome)){
+    const x = un.includes('mol') ? x0 * 6.006 : x0;
+    if(x > 50) add('atencao', 'Ureia acima de 50 mg/dL');
+    else if(x < 10) add('atencao', 'Ureia abaixo de 10 mg/dL');
+  }
+  if(/urico/.test(nome)){
+    const x = un.includes('mol') ? x0 / 59.48 : x0;
+    if(x > (hom ? 7.2 : 6.0)) add('atencao', 'Ácido úrico acima de ' + (hom ? '7,2' : '6,0') + ' mg/dL (hiperuricemia)');
+  }
+  if(/tgo|\bast\b/.test(nome) && x0 > 40) add('atencao', 'TGO (AST) acima de 40 U/L');
+  if(/tgp|\balt\b/.test(nome) && x0 > 41) add('atencao', 'TGP (ALT) acima de 41 U/L');
+  if(/\bggt\b/.test(nome)){ const lim = hom ? 61 : 36; if(x0 > lim) add('atencao', 'GGT acima de ' + lim + ' U/L'); }
+  if(/albumina/.test(nome)){
+    if(x0 < 2.5) add('alerta', 'Albumina muito baixa (< 2,5 g/dL)');
+    else if(x0 < 3.5) add('atencao', 'Albumina abaixo de 3,5 g/dL');
+  }
+  if(/proteinas totais/.test(nome)){
+    if(x0 < 6.0) add('atencao', 'Proteínas totais abaixo de 6,0 g/dL');
+    else if(x0 > 8.3) add('atencao', 'Proteínas totais acima de 8,3 g/dL');
+  }
+  if(/hemat/.test(nome)){
+    const lo = hom ? 41 : 36, hi = hom ? 53 : 46;
+    if(x0 < lo) add('atencao', 'Hematócrito abaixo de ' + lo + '%');
+    else if(x0 > hi) add('atencao', 'Hematócrito acima de ' + hi + '%');
+  }
+  if(/^ferro/.test(nome)){
+    if(x0 < 50) add('atencao', 'Ferro sérico abaixo de 50 µg/dL');
+    else if(x0 > 170) add('atencao', 'Ferro sérico acima de 170 µg/dL');
+  }
+  if(/folico|folato/.test(nome) && x0 < 3) add('atencao', 'Ácido fólico abaixo de 3 ng/mL');
+  if(/fosforo/.test(nome)){
+    if(x0 < 2.5) add('atencao', 'Fósforo abaixo de 2,5 mg/dL');
+    else if(x0 > 4.5) add('atencao', 'Fósforo acima de 4,5 mg/dL');
+  }
+  if(/magnesio/.test(nome)){
+    if(x0 < 1.7) add('atencao', 'Magnésio abaixo de 1,7 mg/dL');
+    else if(x0 > 2.2) add('atencao', 'Magnésio acima de 2,2 mg/dL');
+  }
+  if(/\bpcr\b|proteina c reativa/.test(nome) && x0 > 5) add('atencao', 'PCR acima de 5 mg/L (inflamação)');
+  /* fora da referência informada no resultado do laboratório */
+  const sit = statusExame(e);
+  if(sit && sit[0] !== 'Dentro') add('atencao', 'Fora da referência do laboratório (' + sit[0].toLowerCase() + ')');
   if(/tsh/.test(nome)){
     if(x0 > 4.5) add('atencao', 'TSH acima de 4,5 mUI/L');
     else if(x0 < 0.4) add('atencao', 'TSH abaixo de 0,4 mUI/L');
