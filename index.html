@@ -781,6 +781,48 @@ const PRE_FICHA = [
   ['fAtiv', ['atividade','sono','alcool','tabaco']],
   ['fExam', ['exames']]
 ];
+/* seções da pré-consulta, na ordem do formulário pre_consulta.html */
+const PRE_SECOES = [
+  ['Sobre você', ['nome','nasc','sexo','tel','peso','altura']],
+  ['Motivo e histórico', ['motivo','acompanhamento','acompanhamento_gostou','acompanhamento_nao_deu_certo']],
+  ['Saúde', ['condicoes','condicoes_outra','cirurgias','medicamentos','suplementos','alergias','gestacao','exames']],
+  ['Hábitos', ['evacua','intestino','agua','urina','sono','atividade','alcool','bebida','bebida_qtd','tabaco','substancias','rotina','cozinha']],
+  ['Alimentação', ['refeicoes','dia_tipico','gosta','nao_gosta','restricoes','restricoes_outra','fora','dificuldades','controle']],
+  ['Gorduras, açúcar e sal', ['pessoas_casa','gordura','acucar','sal']],
+  ['Últimas 24 horas', ['r24_refeicoes','ref_1','ref_2','ref_3','ref_4','ref_5','ref_6','ref_7','ref_8','beliscou','beliscos','doces','doces_detalhe']],
+  ['Final', ['outros']]
+];
+function agruparPreConsulta(respostas){
+  const porId = {};
+  (respostas || []).forEach(a => { if(a && a.id) porId[a.id] = a; });
+  const usados = new Set();
+  const vazio = v => String(v == null ? '' : v).trim() === '';
+  const secoes = PRE_SECOES.map(([titulo, ids]) => {
+    const itens = ids.filter(id => porId[id] && !vazio(porId[id].resposta)).map(id => {
+      usados.add(id);
+      return { pergunta: porId[id].pergunta, resposta: String(porId[id].resposta).trim() };
+    });
+    return { titulo, itens };
+  }).filter(sec => sec.itens.length);
+  const outras = (respostas || []).filter(a => a && a.id && !usados.has(a.id) && !vazio(a.resposta))
+    .map(a => ({ pergunta: a.pergunta, resposta: String(a.resposta).trim() }));
+  if(outras.length) secoes.push({ titulo: 'Outras respostas', itens: outras });
+  return secoes;
+}
+function resumoPreConsulta(r){
+  r = r || {};
+  const linhas = [];
+  const add = (rotulo, valor) => { if(String(valor || '').trim()) linhas.push([rotulo, String(valor).trim()]); };
+  add('Motivo', r.motivo);
+  add('Diagnósticos', [r.condicoes, r.condicoes_outra].filter(Boolean).join('; '));
+  add('Cirurgias', r.cirurgias);
+  add('Medicamentos', r.medicamentos);
+  add('Alergias e intolerâncias', r.alergias);
+  add('Restrições alimentares', [r.restricoes, r.restricoes_outra].filter(Boolean).join('; '));
+  add('Gestação ou amamentação', r.gestacao);
+  add('Peso e altura', (r.peso || r.altura) ? ((r.peso || '—') + ' kg · ' + (r.altura || '—') + ' cm') : '');
+  return linhas;
+}
 function preStatus(msg, ok){
   const el = document.getElementById('preStatus');
   if(el){ el.textContent = msg; el.style.color = ok ? 'var(--brand)' : 'var(--bad)'; }
@@ -832,8 +874,10 @@ async function criarDocPreConsulta(p, docAnterior){
     'Recebida em: ' + fmtData(pc.recebidoEm.slice(0,10)),
     pc.enviadoEm ? 'Enviada pelo paciente em: ' + fmtData(pc.enviadoEm.slice(0,10)) : ''
   ].filter(x => x !== '');
-  const respostas = (pc.respostas || []).map(a => a.pergunta + '\n' + (a.resposta || '—')).join('\n\n');
-  const texto = cab.join('\n') + '\n\nRespostas\n\n' + respostas + '\n';
+  const resumo = resumoPreConsulta(pc.r).map(([k, v]) => k + ': ' + v);
+  const blocos = agruparPreConsulta(pc.respostas).map(sec =>
+    sec.titulo.toUpperCase() + '\n\n' + sec.itens.map(a => a.pergunta + '\n' + a.resposta).join('\n\n'));
+  const texto = cab.join('\n') + '\n\nRESUMO\n\n' + (resumo.join('\n') || '—') + '\n\n' + blocos.join('\n\n') + '\n';
   const titulo = 'Pré-consulta · ' + p.nome;
   try {
     if(docAnterior) await NUVEM.apagarDocumento(docAnterior);
@@ -850,7 +894,11 @@ function preCard(p){
     <div class="muted">Recebida em ${data}${enviado}</div>
     ${pc.docId ? `<div class="muted">Documento no Drive: <a href="https://docs.google.com/document/d/${esc(pc.docId)}/edit" target="_blank" rel="noopener">${esc(pc.docTitulo || 'abrir')}</a></div>` : ''}
     <div style="margin:10px 0;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sec mini" onclick="aplicarPreConsulta()">Preencher campos vazios da ficha</button><button class="btn danger mini" onclick="excluirPreConsulta()">Excluir pré-consulta</button></div>
-    ${(pc.respostas || []).map(a => `<div style="border-top:1px solid var(--line);padding:8px 0"><b>${esc(a.pergunta)}</b><div style="white-space:pre-wrap">${esc(a.resposta)}</div></div>`).join('')}
+    <div style="background:#fde8ee;border-radius:8px;padding:10px 12px;margin:8px 0"><b>Resumo para a consulta</b>
+      ${resumoPreConsulta(pc.r).map(([k, v]) => `<div style="margin-top:6px"><b>${esc(k)}:</b> <span style="white-space:pre-wrap">${esc(v)}</span></div>`).join('') || '<div class="muted">Nada marcado no resumo.</div>'}
+    </div>
+    ${agruparPreConsulta(pc.respostas).map(sec => `<h3 style="margin:16px 0 4px">${esc(sec.titulo)}</h3>` +
+      sec.itens.map(a => `<div style="border-top:1px solid var(--line);padding:8px 0"><b>${esc(a.pergunta)}</b><div style="white-space:pre-wrap">${esc(a.resposta)}</div></div>`).join('')).join('')}
   </div>`;
 }
 function aplicarPreConsulta(){
@@ -2962,8 +3010,6 @@ function montarPlano(p, pr){
     <tfoot><tr><th colspan="2">Total do dia</th><th class="num">${fmt(t.k,0)}</th><th class="num">${fmt(t.p)}</th><th class="num">${fmt(t.l)}</th><th class="num">${fmt(t.c)}</th><th class="num">${fmt(t.f)}</th></tr></tfoot>
   </table>
   <p class="muted" style="margin:4px 0 0">Distribuição calórica: ${dist}</p>
-  <h3>Micronutrientes prescritos × RDA</h3>
-  ${blocoReferencias(t, semDadoDe(pr.refeicoes.flatMap(r => r.itens)), p, 'Prescrito')}
   <h3>Plano alimentar detalhado</h3>
   ${boxes}
   ${pr.orientacoes ? `<h3>Orientações</h3><div class="txt">${esc(pr.orientacoes)}</div>` : ''}
