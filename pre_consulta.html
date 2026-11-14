@@ -28,6 +28,10 @@
   .opcao input { width:20px; height:20px; margin:0; flex:0 0 auto; }
   .opcao span { flex:1; }
   .outro { margin-top:8px; }
+  .figura { margin:4px 0 12px; padding:10px; background:#fff; border:1px solid var(--line); border-radius:8px; }
+  .figura svg { width:100%; height:auto; display:block; }
+  .opcao-qtd { margin-bottom:8px; }
+  .opcao-qtd .qtd { display:block; margin:6px 0 2px; }
   .erro { display:none; background:var(--brand-2); color:var(--bad); border:1px solid var(--soft); border-radius:8px; padding:12px; margin-bottom:14px; font-size:15px; }
   .erro.ativo { display:block; }
   .consent { background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
@@ -62,7 +66,7 @@
     <div class="consent">
       <label>
         <input type="checkbox" id="consentimento" name="consentimento">
-        <span><span class="obrig">*</span> Autorizo a nutricionista responsável a registrar estas informações no meu prontuário, usadas somente para o meu atendimento nutricional, conforme a Lei Geral de Proteção de Dados (LGPD).</span>
+        <span><span class="obrig">*</span> Autorizo a nutricionista responsável a registrar estas informações no meu prontuário, usadas somente para o meu atendimento nutricional, conforme a Lei Geral de Proteção de Dados (LGPD). <a href="politica_privacidade.html" target="_blank" rel="noopener">Ler a Política de Privacidade</a>.</span>
       </label>
     </div>
 
@@ -74,7 +78,7 @@
     <p>Obrigada. A nutricionista já recebeu suas respostas e vai revisá-las antes da consulta.</p>
   </div>
 
-  <p class="rodape">Pré-consulta nutricional. Em caso de dúvida, pergunte à nutricionista antes de enviar.</p>
+  <p class="rodape">Pré-consulta nutricional. Em caso de dúvida, pergunte à nutricionista antes de enviar. <a href="politica_privacidade.html" target="_blank" rel="noopener">Política de Privacidade</a></p>
 </main>
 
 <script>
@@ -97,9 +101,9 @@
     ]},
     { titulo:'Motivo da consulta', campos:[
       { id:'motivo', rotulo:'O que te trouxe até a consulta?', tipo:'area', obrig:true },
-      { id:'objetivo', rotulo:'Qual é o seu principal objetivo?', tipo:'radio', opcoes:['Emagrecer','Ganhar massa muscular','Melhorar a saúde ou controlar uma doença','Melhorar a alimentação de forma geral','Outro'] },
       { id:'acompanhamento', rotulo:'Já fez acompanhamento com nutricionista antes?', tipo:'radio', opcoes:['Sim','Não'], lado:true },
-      { id:'acompanhamento_detalhe', rotulo:'Se sim, quando e o que mudou?', tipo:'area' }
+      { id:'acompanhamento_gostou', rotulo:'O que mais gostou?', tipo:'area', mostrarSe: r => r.acompanhamento === 'Sim' },
+      { id:'acompanhamento_nao_deu_certo', rotulo:'O que não deu certo?', tipo:'area', mostrarSe: r => r.acompanhamento === 'Sim' }
     ]},
     { titulo:'Saúde', campos:[
       { id:'condicoes', rotulo:'Você tem ou já teve algum destes diagnósticos?', tipo:'check', opcoes:['Diabetes','Pressão alta','Colesterol ou triglicerídeos altos','Gordura no fígado','Doença renal','Doença da tireoide','Anemia','Doença celíaca','Problemas intestinais (intestino irritável, refluxo, gastrite)','Osteoporose','Nenhum destes'] },
@@ -112,13 +116,20 @@
       { id:'exames', rotulo:'Exames recentes (tipo e data)', tipo:'area', dica:'Se tiver, pode enviar fotos ou PDFs junto com o arquivo pelo WhatsApp.' }
     ]},
     { titulo:'Hábitos', campos:[
-      { id:'intestino', rotulo:'Como está o funcionamento do seu intestino?', tipo:'radio', opcoes:['Normal','Preso (constipado)','Solto (diarreia)','Alterna entre os dois'] },
+      { id:'evacua', rotulo:'Com que frequência você evacua?', tipo:'radio', opcoes:['Todos os dias','De 2 em 2 dias','De 3 em 3 dias','1 vez por semana','Menos de 1 vez por semana'] },
+      { id:'intestino', rotulo:'Como são as suas fezes? Escolha o tipo na escala de Bristol.', tipo:'radio', figura:'bristol', opcoes:['Tipo 1: pedaços duros e separados','Tipo 2: em formato de salsicha, mas grumosa','Tipo 3: salsicha com rachaduras','Tipo 4: salsicha lisa e macia','Tipo 5: pedaços macios e separados','Tipo 6: pastosa, com bordas irregulares','Tipo 7: aquosa, sem pedaços sólidos'] },
       { id:'agua', rotulo:'Quanta água você bebe por dia?', tipo:'radio', opcoes:['Menos de 1 litro','Entre 1 e 2 litros','Mais de 2 litros'] },
+      { id:'urina', rotulo:'Como é a sua urina? Escolha a cor na escala de Armstrong.', tipo:'radio', figura:'armstrong', opcoes:['Cor 1: muito clara','Cor 2: clara','Cor 3: amarelo claro','Cor 4: amarelo','Cor 5: amarelo escuro','Cor 6: âmbar','Cor 7: laranja-marrom','Cor 8: marrom escuro'] },
       { id:'sono', rotulo:'Quantas horas você dorme por noite, em média?', tipo:'numero', passo:'0.5' },
       { id:'atividade', rotulo:'Atividade física', tipo:'area', dica:'Qual atividade, quantas vezes por semana e por quanto tempo.' },
-      { id:'alcool', rotulo:'Consumo de álcool', tipo:'radio', opcoes:['Não consumo','Raramente','Semanalmente','Diariamente'] },
-      { id:'tabaco', rotulo:'Você fuma?', tipo:'radio', opcoes:['Não','Sim','Já fumei'], lado:true },
-      { id:'rotina', rotulo:'Como é sua rotina de trabalho e quem costuma cozinhar em casa?', tipo:'area' }
+      { id:'alcool', rotulo:'Com que frequência você bebe álcool?', tipo:'radio', opcoes:['Não bebo','Raramente (1 a 2 vezes por mês)','Em ocasiões especiais','1 dia da semana','2 dias da semana','3 dias da semana','4 ou mais dias da semana'] },
+      { id:'bebida', rotulo:'Qual tipo de bebida alcoólica você bebe?', tipo:'check', opcoes:['Cerveja','Vinho','Destilados (cachaça, whisky, vodka, gin etc.)','Outras'], mostrarSe: r => !!r.alcool && r.alcool !== 'Não bebo' },
+      { id:'bebida_qtd', rotulo:'Em geral, quantas unidades você bebe em cada vez?', tipo:'radio', dica:'Considere uma lata de cerveja, uma taça de vinho ou uma dose de destilado como 1 unidade.', opcoes:['1 unidade','2 a 3 unidades','4 a 5 unidades','6 ou mais unidades'], mostrarSe: r => !!r.alcool && r.alcool !== 'Não bebo' },
+      { id:'alcool_doses', rotulo:'Em um dia em que bebe, quantas doses você consome?', tipo:'radio', dica:'Uma dose equivale, aproximadamente, a 1 lata de cerveja (350 ml), 1 taça de vinho (120 ml) ou 1 dose de destilado (40 ml).', opcoes:['1 dose','2 a 3 doses','4 ou mais doses'], mostrarSe: r => !!r.alcool && r.alcool !== 'Não bebo' },
+      { id:'tabaco', rotulo:'Você fuma ou usa outras drogas?', tipo:'radio', opcoes:['Não','Sim (tenho vício)','Sim (às vezes, de forma recreativa)'], lado:true },
+      { id:'substancias', rotulo:'Quais?', tipo:'check', opcoes:['Cigarro','Cigarro eletrônico (vape)','Narguilé ou charuto','Maconha','Cocaína ou crack','Anfetaminas ou estimulantes','Ecstasy (MDMA)','Alucinógenos','Medicamentos usados sem orientação médica','Outra'], mostrarSe: r => !!r.tabaco && r.tabaco !== 'Não' },
+      { id:'rotina', rotulo:'Como é sua rotina de trabalho?', tipo:'area' },
+      { id:'cozinha', rotulo:'Quem costuma cozinhar em casa?', tipo:'area' }
     ]},
     { titulo:'Alimentação', campos:[
       { id:'refeicoes', rotulo:'Quantas refeições você faz por dia?', tipo:'numero', passo:'1' },
@@ -131,13 +142,56 @@
       { id:'dificuldades', rotulo:'O que mais dificulta você seguir uma alimentação saudável?', tipo:'area' },
       { id:'controle', rotulo:'Você sente dificuldade para controlar a quantidade de comida ou perde o controle ao comer?', tipo:'radio', opcoes:['Não','Às vezes','Frequentemente'], dica:'Esta informação é confidencial e pode ser conversada pessoalmente, se preferir.' }
     ]},
+    { titulo:'Gorduras, açúcar e sal', campos:[
+      { id:'gordura', rotulo:'Quais gorduras você usa no preparo e no tempero?', tipo:'lista_qtd', dica:'Marque as que usa e informe, em cada uma, quanto consome por mês (ex.: 1 garrafa de 500 ml).', opcoes:['Azeite de oliva','Óleo de soja','Óleo de canola','Óleo de girassol','Óleo de milho','Manteiga','Margarina','Banha de porco','Óleo ou gordura de coco','Creme de leite ou requeijão','Outra'] },
+      { id:'acucar', rotulo:'Açúcar e adoçantes', tipo:'lista_qtd', dica:'Marque os que usa e informe, em cada um, quanto consome por mês.', opcoes:['Açúcar branco ou cristal','Açúcar mascavo ou demerara','Mel','Adoçante artificial (sucralose, aspartame etc.)','Adoçante natural (stévia etc.)','Outro'] },
+      { id:'sal', rotulo:'Sal e temperos prontos', tipo:'lista_qtd', dica:'Marque os que usa e informe, em cada um, quanto consome por mês.', opcoes:['Sal de cozinha','Sal grosso ou marinho','Temperos prontos (sal temperado, tempero para carne etc.)','Caldo ou cubo de carne ou galinha','Molho de soja ou shoyu'] }
+    ]},
     { titulo:'Últimas 24 horas', campos:[
-      { id:'recordatorio', rotulo:'Se lembrar, conte o que comeu ontem', tipo:'area', dica:'Inclua horários e quantidades aproximadas, se souber. Pode deixar em branco.' }
+      { id:'r24_refeicoes', rotulo:'Quantas refeições você fez ontem?', tipo:'numero', passo:'1', dica:'Conte as refeições e lanches principais. Depois, descreva cada uma abaixo.' },
+      { id:'ref_1', rotulo:'Refeição 1: horário e o que comeu', tipo:'area', mostrarSe: r => Number(r.r24_refeicoes) >= 1 },
+      { id:'ref_2', rotulo:'Refeição 2: horário e o que comeu', tipo:'area', mostrarSe: r => Number(r.r24_refeicoes) >= 2 },
+      { id:'ref_3', rotulo:'Refeição 3: horário e o que comeu', tipo:'area', mostrarSe: r => Number(r.r24_refeicoes) >= 3 },
+      { id:'ref_4', rotulo:'Refeição 4: horário e o que comeu', tipo:'area', mostrarSe: r => Number(r.r24_refeicoes) >= 4 },
+      { id:'ref_5', rotulo:'Refeição 5: horário e o que comeu', tipo:'area', mostrarSe: r => Number(r.r24_refeicoes) >= 5 },
+      { id:'ref_6', rotulo:'Refeição 6: horário e o que comeu', tipo:'area', mostrarSe: r => Number(r.r24_refeicoes) >= 6 },
+      { id:'ref_7', rotulo:'Refeição 7: horário e o que comeu', tipo:'area', mostrarSe: r => Number(r.r24_refeicoes) >= 7 },
+      { id:'ref_8', rotulo:'Refeição 8: horário e o que comeu', tipo:'area', mostrarSe: r => Number(r.r24_refeicoes) >= 8 },
+      { id:'beliscou', rotulo:'Você beliscou entre as refeições ontem?', tipo:'radio', opcoes:['Sim','Não'], lado:true },
+      { id:'beliscos', rotulo:'Se sim, o que beliscou e em que horário?', tipo:'area', mostrarSe: r => r.beliscou === 'Sim' },
+      { id:'doces', rotulo:'Você consumiu doces ontem?', tipo:'radio', opcoes:['Sim','Não'], lado:true },
+      { id:'doces_detalhe', rotulo:'Se sim, quais doces e quantas porções?', tipo:'area', mostrarSe: r => r.doces === 'Sim' }
     ]},
     { titulo:'Final', campos:[
       { id:'outros', rotulo:'Algo mais que você queira contar?', tipo:'area' }
     ]}
   ];
+
+  /* Figuras desenhadas para o formulário (não são reprodução de material de terceiros).
+     Bristol: tipos 1 a 7 de fezes. Armstrong: 8 tons de urina, do mais claro (1) ao mais escuro (8). */
+  const BRISTOL = `<svg viewBox="0 0 700 150" role="img" aria-label="Escala de Bristol, tipos 1 a 7">
+    <g fill="#8a5a3c">
+      <circle cx="40" cy="55" r="9"/><circle cx="58" cy="48" r="9"/><circle cx="34" cy="72" r="9"/><circle cx="54" cy="78" r="9"/><circle cx="72" cy="66" r="9"/>
+      <rect x="112" y="40" width="70" height="20" rx="10"/><circle cx="117" cy="50" r="10"/><circle cx="142" cy="58" r="10"/><circle cx="168" cy="50" r="10"/>
+      <rect x="208" y="48" width="66" height="26" rx="13"/><path d="M226 52 L226 70 M248 54 L248 72" stroke="#f6e7da" stroke-width="2" fill="none"/>
+      <rect x="308" y="54" width="82" height="20" rx="10"/>
+      <circle cx="418" cy="55" r="10"/><circle cx="436" cy="70" r="9"/><circle cx="458" cy="58" r="10"/><circle cx="472" cy="76" r="8"/>
+      <path d="M514 58 q6-12 14-6 q8-10 16 0 q8-6 12 6 q6 4 0 14 q-6 8-16 4 q-10 8-18 0 q-10 2-8-12z"/>
+      <path d="M614 60 q12-14 26-6 q14-10 24 2 q10 10 2 22 q-10 8-24 2 q-14 8-26-2 q-10-8-2-18z" fill="#c9a27e"/>
+    </g>
+    <g font-family="Arial,sans-serif" font-size="13" fill="#3b1f2a" text-anchor="middle">
+      <text x="50" y="118">1</text><text x="150" y="118">2</text><text x="240" y="118">3</text><text x="350" y="118">4</text><text x="450" y="118">5</text><text x="550" y="118">6</text><text x="650" y="118">7</text>
+      <text x="50" y="136" font-size="11" fill="#7d5f69">separado</text><text x="150" y="136" font-size="11" fill="#7d5f69">grumoso</text><text x="240" y="136" font-size="11" fill="#7d5f69">rachado</text><text x="350" y="136" font-size="11" fill="#7d5f69">liso</text><text x="450" y="136" font-size="11" fill="#7d5f69">macio</text><text x="550" y="136" font-size="11" fill="#7d5f69">pastoso</text><text x="650" y="136" font-size="11" fill="#7d5f69">líquido</text>
+    </g>
+  </svg>`;
+  const ARMSTRONG_TONS = ['#fff9d6','#fff3b0','#ffe97a','#ffd84d','#f7c23c','#e8a22e','#c97f22','#8f5a1e'];
+  const ARMSTRONG = `<svg viewBox="0 0 700 100" role="img" aria-label="Escala de Armstrong para cor da urina, de 1 a 8">
+    ${ARMSTRONG_TONS.map((c, i) => `<rect x="${i*85+6}" y="6" width="74" height="54" rx="6" fill="${c}" stroke="#d9b8c2"/>`).join('')}
+    ${ARMSTRONG_TONS.map((c, i) => `<text x="${i*85+43}" y="82" font-family="Arial,sans-serif" font-size="14" fill="#3b1f2a" text-anchor="middle">${i+1}</text>`).join('')}
+    <text x="6" y="98" font-family="Arial,sans-serif" font-size="11" fill="#1e7a3c">1 a 3: hidratado</text>
+    <text x="694" y="98" font-family="Arial,sans-serif" font-size="11" fill="#b3261e" text-anchor="end">7 a 8: desidratado</text>
+  </svg>`;
+  const FIGURAS = { bristol: BRISTOL, armstrong: ARMSTRONG };
 
   const TODOS = SECOES.flatMap(s => s.campos);
   const $ = id => document.getElementById(id);
@@ -154,12 +208,17 @@
     else if(c.tipo === 'data') corpo = `<input type="date" ${nome}>`;
     else if(c.tipo === 'numero') corpo = `<input type="number" inputmode="decimal" step="${c.passo || 'any'}" min="0" ${nome}>`;
     else if(c.tipo === 'area') corpo = `<textarea ${nome}></textarea>`;
+    else if(c.tipo === 'lista_qtd'){
+      corpo = '<div class="opcoes">' + c.opcoes.map((o, i) =>
+        `<div class="opcao-qtd"><label class="opcao"><input type="checkbox" name="${c.id}" value="${esc(o)}"><span>${esc(o)}</span></label><input type="text" class="qtd" id="${c.id}-qtd-${i}" placeholder="Quanto por mês? Ex.: 1 garrafa de 500 ml" autocomplete="off"></div>`).join('') + '</div>';
+    }
     else if(c.tipo === 'radio' || c.tipo === 'check'){
       const tipo = c.tipo === 'radio' ? 'radio' : 'checkbox';
       corpo = `<div class="opcoes${c.lado ? ' lado' : ''}">` + c.opcoes.map((o, i) =>
         `<label class="opcao"><input type="${tipo}" name="${c.id}" value="${esc(o)}"><span>${esc(o)}</span></label>`).join('') + '</div>';
     }
-    return `<div class="campo" data-campo="${c.id}">${c.tipo === 'radio' || c.tipo === 'check' ? rot : `<label for="${c.id}" style="display:block">${rot}</label>`}${dica}${corpo}</div>`;
+    const figura = c.figura ? `<div class="figura">${FIGURAS[c.figura]}</div>` : '';
+    return `<div class="campo" data-campo="${c.id}">${['radio','check','lista_qtd'].includes(c.tipo) ? rot : `<label for="${c.id}" style="display:block">${rot}</label>`}${dica}${figura}${corpo}</div>`;
   }
 
   function montar(){
@@ -175,6 +234,14 @@
     if(c.tipo === 'check'){
       return Array.from(document.querySelectorAll(`input[name="${c.id}"]:checked`)).map(i => i.value).join('; ');
     }
+    if(c.tipo === 'lista_qtd'){
+      return c.opcoes.map((o, i) => {
+        const m = document.querySelector(`input[name="${c.id}"][value="${CSS.escape(o)}"]`);
+        const q = ($(c.id + '-qtd-' + i).value || '').trim();
+        if(!(m && m.checked) && !q) return null;
+        return o + ': ' + (q || 'não informou');
+      }).filter(Boolean).join('; ');
+    }
     const el = $(c.id);
     return el ? el.value.trim() : '';
   }
@@ -182,7 +249,19 @@
   function coletar(){
     const r = {};
     TODOS.forEach(c => r[c.id] = lerValor(c));
+    TODOS.forEach(c => { if(c.mostrarSe && !c.mostrarSe(r)) r[c.id] = ''; });
     return r;
+  }
+
+  /* mostra ou oculta perguntas que dependem de outra resposta */
+  function atualizarVisibilidade(){
+    const r = {};
+    TODOS.forEach(c => r[c.id] = lerValor(c));
+    TODOS.forEach(c => {
+      if(!c.mostrarSe) return;
+      const el = document.querySelector(`[data-campo="${c.id}"]`);
+      if(el) el.style.display = c.mostrarSe(r) ? '' : 'none';
+    });
   }
 
   function aplicar(r){
@@ -197,6 +276,16 @@
           const m = document.querySelector(`input[name="${c.id}"][value="${CSS.escape(v)}"]`);
           if(m) m.checked = true;
         });
+      } else if(c.tipo === 'lista_qtd') {
+        String(val).split('; ').forEach(item => {
+          const k = item.indexOf(': '); if(k < 0) return;
+          const nome = item.slice(0, k), q = item.slice(k + 2);
+          const idx = c.opcoes.indexOf(nome); if(idx < 0) return;
+          const m = document.querySelector(`input[name="${c.id}"][value="${CSS.escape(nome)}"]`);
+          if(m) m.checked = true;
+          $(c.id + '-qtd-' + idx).value = q === 'não informou' ? '' : q;
+        });
+        document.querySelectorAll(`[data-campo="${c.id}"] .opcao-qtd`).forEach(d => d.classList.toggle('marcado', d.querySelector('input[type=checkbox]').checked));
       } else {
         const el = $(c.id); if(el) el.value = val;
       }
@@ -269,11 +358,17 @@
       botao.disabled = false; botao.textContent = 'Enviar para a nutricionista';
     }
   });
-  $('form').addEventListener('input', salvarRascunho);
+  $('secoes').addEventListener('change', (e) => {
+    const t = e.target;
+    if(t.matches && t.matches('.opcao-qtd input[type=checkbox]')) t.closest('.opcao-qtd').classList.toggle('marcado', t.checked);
+    atualizarVisibilidade();
+  });
+  $('form').addEventListener('input', () => { atualizarVisibilidade(); salvarRascunho(); });
   $('form').addEventListener('change', salvarRascunho);
 
   montar();
   carregarRascunho();
+  atualizarVisibilidade();
 })();
 </script>
 </body>
