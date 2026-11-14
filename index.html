@@ -88,9 +88,22 @@ th{font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
   #printArea{display:block!important}
   @page{margin:14mm}
 }
+#entrar{display:none}
+body.bloqueado #entrar{display:block}
+body.bloqueado header, body.bloqueado main{display:none}
 </style>
 </head>
-<body>
+<body class="bloqueado">
+<div id="entrar">
+  <div class="card" style="max-width:400px;margin:12vh auto">
+    <h2>Meu consultório</h2>
+    <p class="muted" id="lkTexto"></p>
+    <label>Senha<input type="password" id="lkSenha" autocomplete="current-password" onkeydown="if(event.key==='Enter')entrar()"></label>
+    <label id="lkRepLbl" style="display:none;margin-top:10px">Repita a senha<input type="password" id="lkSenha2" autocomplete="new-password" onkeydown="if(event.key==='Enter')entrar()"></label>
+    <div style="margin-top:12px"><button class="btn" id="lkBtn" onclick="entrar()">Entrar</button></div>
+    <div id="lkStatus" style="margin-top:8px;color:var(--bad)"></div>
+  </div>
+</div>
 <header>
   <h1>Meu consultório</h1>
   <nav id="nav">
@@ -116,6 +129,7 @@ th{font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
   <select id="selPaciente"></select>
   <span id="pacInfo" class="muted"></span>
   <span id="sync" class="muted" style="margin-left:auto;font-size:12px"></span>
+  <button class="btn mini sec" onclick="bloquear()">Bloquear</button>
 </div>
 <main>
   <section id="tab-inicio"></section>
@@ -147,7 +161,7 @@ const REFEICOES_PADRAO = ['Café da manhã','Lanche da manhã','Almoço','Lanche
 const HORARIOS_PADRAO = ['07:00','10:00','12:00','15:30','19:00','21:30'];
 const DOBRAS = [['peito','Peitoral'],['axilar','Axilar média'],['triceps','Tríceps'],['subesc','Subescapular'],['abdome','Abdominal'],['supra','Suprailíaca'],['coxa','Coxa']];
 
-let DB = carregar();
+let DB = vazioDB();
 const SYNC_KEY = KEY + '-sync';
 let NUVEM = null, CHAVE = null, ULTIMO = null, FALHAS = [], SINC_RODANDO = false, SINC_PENDENTE = false, SINC_PUXAR = false, SINC_TIMER = null, ERRO_SINC = false, ULTIMA_NUVEM = null;
 let ALIM = [], MAPA = new Map(), ROTULO = new Map();
@@ -165,13 +179,10 @@ function v(id){ return document.getElementById(id).value.trim(); }
 function rotulo(a){ return a.nome + '  ·  ' + a.src + ' ' + a.cod; }
 
 /* ---------- armazenamento ---------- */
-function carregar(){
-  try { const x = JSON.parse(localStorage.getItem(KEY)); if(x && Array.isArray(x.pacientes)){ x.extras = x.extras || []; x.agenda = x.agenda || []; x.espera = x.espera || []; x.financeiro = x.financeiro || {}; return x; } } catch(e){}
-  return { pacientes:[], extras:[], agenda:[], espera:[], financeiro:{}, ativo:null };
-}
+function vazioDB(){ return { pacientes:[], extras:[], agenda:[], espera:[], financeiro:{}, ativo:null }; }
+function normalizarDB(x){ x.pacientes = x.pacientes || []; x.extras = x.extras || []; x.agenda = x.agenda || []; x.espera = x.espera || []; x.financeiro = x.financeiro || {}; return x; }
 function salvar(){
-  try { localStorage.setItem(KEY, JSON.stringify(DB)); }
-  catch(e){ alert('Não foi possível salvar neste navegador: ' + e.message); }
+  gravarCifrado();
   if(CHAVE) sincronizar(false);
 }
 
@@ -302,7 +313,7 @@ function mapaLocal(){
 }
 async function hashesDe(m){ const h = {}; for(const [k, v] of m) h[k] = await hashDe(JSON.stringify(v)); return h; }
 function gravarSync(){ try { localStorage.setItem(SYNC_KEY, JSON.stringify(ULTIMO)); } catch(e){} }
-function gravarLocal(){ try { localStorage.setItem(KEY, JSON.stringify(DB)); } catch(e){} }
+function gravarLocal(){ gravarCifrado(); }
 function msgErro(e){
   const c = e && e.code;
   if(c === 'needs_reauth') return 'conexão com o Google Drive expirou; reconecte em Configurações > Conectores';
@@ -3156,6 +3167,17 @@ function cidOpcoes(){ return CID_LISTA.map(([c, d]) => `<option value="${c} · $
 
 function rBackup(){
   document.getElementById('tab-backup').innerHTML = `
+  <div class="card"><h2>Senha de acesso</h2>
+    <p class="muted">Troca a senha que abre o consultório neste navegador. Os dados são cifrados de novo com a nova senha.</p>
+    <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr));margin-top:10px">
+      <label>Senha atual<input type="password" id="trAtual" autocomplete="current-password"></label>
+      <label>Nova senha (mín. 8)<input type="password" id="trNova" autocomplete="new-password"></label>
+      <label>Repita a nova senha<input type="password" id="trNova2" autocomplete="new-password"></label>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <button class="btn" onclick="trocarSenhaLocal()">Trocar senha</button>
+      <span class="muted" id="trStatus"></span>
+    </div></div>
   <div class="card"><h2>Salvar no Google Drive</h2>
     <p class="muted">Envia todos os dados deste navegador para o seu Google Drive, criptografados. As alterações já são enviadas automaticamente; use este botão antes de sair do site para confirmar.</p>
     <div style="margin-top:12px;display:flex;gap:12px;flex-wrap:wrap;align-items:center">
@@ -3385,6 +3407,87 @@ function imprimirPlano(){
   window.print();
 }
 
+/* ---------- acesso com senha: dados deste navegador criptografados ---------- */
+const KEY_ENC = KEY + '-cifrado', KEY_SAL = KEY + '-sal';
+let LOCAL_CHAVE = null, GRAVANDO = Promise.resolve(), TROCANDO = false;
+async function cifrarLocal(texto){
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, LOCAL_CHAVE, TE.encode(texto));
+  return { v:1, iv:b64(iv), ct:b64(ct) };
+}
+async function decifrarLocal(env){
+  const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv: unb64(env.iv) }, LOCAL_CHAVE, unb64(env.ct));
+  return TD.decode(pt);
+}
+/* grava em fila, na ordem das alterações; cada gravação usa o estado do momento em que foi pedida */
+function gravarCifrado(){
+  if(!LOCAL_CHAVE || TROCANDO) return;
+  const snap = JSON.stringify(DB);
+  GRAVANDO = GRAVANDO.then(async () => {
+    localStorage.setItem(KEY_ENC, JSON.stringify(await cifrarLocal(snap)));
+  }).catch(e => alert('Não foi possível gravar os dados neste navegador: ' + e.message));
+}
+function prepararEntrada(){
+  const criar = !localStorage.getItem(KEY_ENC);
+  document.getElementById('lkTexto').textContent = criar
+    ? 'Crie uma senha para proteger os dados deste navegador. Use pelo menos 8 caracteres e guarde-a: sem ela os dados não podem ser recuperados.'
+    : 'Digite a senha para abrir o consultório.';
+  document.getElementById('lkRepLbl').style.display = criar ? 'block' : 'none';
+  document.getElementById('lkBtn').textContent = criar ? 'Criar senha e entrar' : 'Entrar';
+  document.body.classList.add('bloqueado');
+}
+async function entrar(){
+  const senha = document.getElementById('lkSenha').value, st = document.getElementById('lkStatus');
+  const env = localStorage.getItem(KEY_ENC), legado = localStorage.getItem(KEY);
+  st.textContent = 'Verificando…';
+  if(env){
+    try {
+      LOCAL_CHAVE = await derivarChave(senha, localStorage.getItem(KEY_SAL));
+      DB = normalizarDB(JSON.parse(await decifrarLocal(JSON.parse(env))));
+    } catch(e){ LOCAL_CHAVE = null; st.textContent = 'Senha incorreta.'; return; }
+  } else {
+    if(senha.length < 8){ st.textContent = 'Use pelo menos 8 caracteres.'; return; }
+    if(senha !== document.getElementById('lkSenha2').value){ st.textContent = 'As senhas não conferem.'; return; }
+    try {
+      const sal = b64(crypto.getRandomValues(new Uint8Array(16)));
+      LOCAL_CHAVE = await derivarChave(senha, sal);
+      DB = legado ? normalizarDB(JSON.parse(legado)) : vazioDB();   // dados antigos, sem criptografia, são cifrados agora
+      localStorage.setItem(KEY_SAL, sal);
+      gravarCifrado(); await GRAVANDO;
+      if(legado) localStorage.removeItem(KEY);
+    } catch(e){ LOCAL_CHAVE = null; st.textContent = 'Não foi possível criar a senha: ' + e.message; return; }
+  }
+  document.getElementById('lkSenha').value = ''; document.getElementById('lkSenha2').value = '';
+  document.body.classList.remove('bloqueado');
+  iniciarApp();
+}
+function bloquear(){ GRAVANDO.then(() => location.reload()); }
+/* troca a senha de acesso: confere a atual, cifra tudo de novo com a nova */
+async function trocarSenhaLocal(){
+  const st = document.getElementById('trStatus');
+  const atual = document.getElementById('trAtual').value, nova = document.getElementById('trNova').value, rep = document.getElementById('trNova2').value;
+  if(!atual){ st.textContent = 'Digite a senha atual.'; return; }
+  if(nova.length < 8){ st.textContent = 'A nova senha precisa ter pelo menos 8 caracteres.'; return; }
+  if(nova !== rep){ st.textContent = 'As novas senhas não conferem.'; return; }
+  if(nova === atual){ st.textContent = 'A nova senha precisa ser diferente da atual.'; return; }
+  st.textContent = 'Trocando…';
+  TROCANDO = true;
+  try {
+    const env = JSON.parse(localStorage.getItem(KEY_ENC));
+    const conferida = await derivarChave(atual, localStorage.getItem(KEY_SAL));
+    try { await crypto.subtle.decrypt({ name:'AES-GCM', iv: unb64(env.iv) }, conferida, unb64(env.ct)); }
+    catch(e){ st.textContent = 'Senha atual incorreta.'; return; }
+    await GRAVANDO;   // termina as gravações pendentes com a chave antiga
+    const salNovo = b64(crypto.getRandomValues(new Uint8Array(16)));
+    LOCAL_CHAVE = await derivarChave(nova, salNovo);
+    localStorage.setItem(KEY_ENC, JSON.stringify(await cifrarLocal(JSON.stringify(DB))));
+    localStorage.setItem(KEY_SAL, salNovo);
+    st.textContent = 'Senha trocada. Use a nova senha da próxima vez.';
+    ['trAtual','trNova','trNova2'].forEach(id => document.getElementById(id).value = '');
+  } catch(e){ st.textContent = 'Não foi possível trocar a senha: ' + e.message; }
+  finally { TROCANDO = false; gravarCifrado(); }
+}
+
 /* ---------- navegação ---------- */
 function renderBarra(){
   const sel = document.getElementById('selPaciente');
@@ -3406,10 +3509,13 @@ document.getElementById('nav').addEventListener('click', e => {
 document.getElementById('selPaciente').addEventListener('change', e => {
   DB.ativo = e.target.value || null; PRESC_ID = null; salvar(); render();
 });
-montarAlimentos();
-document.getElementById('dl-exames').innerHTML = EXAMES_SUGERIDOS.map(([n]) => `<option value="${n}"></option>`).join('');
-iniciarSync();
-render();
+function iniciarApp(){
+  montarAlimentos();
+  document.getElementById('dl-exames').innerHTML = EXAMES_SUGERIDOS.map(([n]) => `<option value="${n}"></option>`).join('');
+  iniciarSync();
+  render();
+}
+prepararEntrada();
 </script>
 </body>
 </html>
