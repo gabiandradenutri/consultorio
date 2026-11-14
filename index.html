@@ -147,7 +147,7 @@ const DOBRAS = [['peito','Peitoral'],['axilar','Axilar média'],['triceps','Trí
 
 let DB = carregar();
 const SYNC_KEY = KEY + '-sync';
-let NUVEM = null, CHAVE = null, ULTIMO = null, FALHAS = [], SINC_RODANDO = false, SINC_PENDENTE = false, SINC_PUXAR = false, SINC_TIMER = null;
+let NUVEM = null, CHAVE = null, ULTIMO = null, FALHAS = [], SINC_RODANDO = false, SINC_PENDENTE = false, SINC_PUXAR = false, SINC_TIMER = null, ERRO_SINC = false, ULTIMA_NUVEM = null;
 let ALIM = [], MAPA = new Map(), ROTULO = new Map();
 let TAB = 'inicio', PRESC_ID = null, BUSCA = '';
 
@@ -418,8 +418,10 @@ async function sincronizar(puxar){
       }
     }
     setSync(FALHAS.length ? 'aviso' : 'ok');
+    ERRO_SINC = false; ULTIMA_NUVEM = new Date();
     if(mudouDoNuvem) render();
   } catch(e){
+    ERRO_SINC = true;
     setSync('erro', msgErro(e));
     clearTimeout(SINC_TIMER); SINC_TIMER = setTimeout(() => sincronizar(false), 20000);
   } finally {
@@ -427,6 +429,24 @@ async function sincronizar(puxar){
     if(SINC_PENDENTE){ const p = SINC_PUXAR; SINC_PENDENTE = false; SINC_PUXAR = false; sincronizar(p); }
   }
 }
+function statusNuvemTexto(){
+  if(!NUVEM) return 'Google Drive não conectado. Conecte pela barra de sincronização no topo.';
+  if(!CHAVE) return 'Digite a senha de sincronização na barra do topo para salvar.';
+  if(ERRO_SINC) return 'A última tentativa falhou; os dados ainda não foram confirmados no Drive.';
+  return ULTIMA_NUVEM ? 'Última gravação confirmada no Google Drive: ' + ULTIMA_NUVEM.toLocaleString('pt-BR') : 'Ainda não houve gravação nesta sessão.';
+}
+async function salvarNaNuvemAgora(){
+  const el = document.getElementById('nuvemStatus');
+  if(!NUVEM || !CHAVE){ el.textContent = statusNuvemTexto(); return; }
+  if(SINC_RODANDO){ el.textContent = 'Já há uma gravação em andamento; aguarde alguns segundos.'; return; }
+  el.textContent = 'Salvando…';
+  await sincronizar(false);
+  el.textContent = statusNuvemTexto();
+}
+/* aviso ao sair com alterações ainda não confirmadas no Drive */
+window.addEventListener('beforeunload', e => {
+  if(SINC_RODANDO || SINC_PENDENTE || ERRO_SINC){ e.preventDefault(); e.returnValue = ''; }
+});
 async function redefinirSenha(){
   const a = document.getElementById('novaSenha'), b = document.getElementById('novaSenha2');
   const s1 = a ? a.value : '', s2 = b ? b.value : '';
@@ -3134,6 +3154,12 @@ function cidOpcoes(){ return CID_LISTA.map(([c, d]) => `<option value="${c} · $
 
 function rBackup(){
   document.getElementById('tab-backup').innerHTML = `
+  <div class="card"><h2>Salvar no Google Drive</h2>
+    <p class="muted">Envia todos os dados deste navegador para o seu Google Drive, criptografados. As alterações já são enviadas automaticamente; use este botão antes de sair do site para confirmar.</p>
+    <div style="margin-top:12px;display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+      <button class="btn" onclick="salvarNaNuvemAgora()">Salvar tudo no Google Drive</button>
+      <span class="muted" id="nuvemStatus">${statusNuvemTexto()}</span>
+    </div></div>
   <div class="card"><h2>Backup e transferência</h2>
     <p class="muted">Os dados ficam somente neste navegador. Exporte um JSON para guardar cópia de segurança ou levar a outro computador.</p>
     <div style="margin-top:12px;display:flex;gap:12px;flex-wrap:wrap;align-items:center">
