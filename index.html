@@ -751,6 +751,124 @@ function excluirPaciente(id){
   if(DB.ativo === id) DB.ativo = null;
   salvar(); render();
 }
+/* ---------- ficha completa do paciente (aba Pacientes) ---------- */
+function abrirFicha(id){
+  DB.ativo = id; PRESC_ID = null; salvar(); render();
+  setTimeout(() => { const el = document.getElementById('fichaCompleta'); if(el) el.scrollIntoView({ behavior:'smooth', block:'start' }); }, 0);
+}
+function cidDeTexto(txt){
+  if(!txt) return { cid:null, cidNome:'' };
+  const code = txt.split('·')[0].trim().toUpperCase();
+  if(!/^[A-Z][0-9]{2}(\.[0-9A-Z]{1,2})?$/.test(code)){ alert('CID inválido. Use o formato da CID-10, por exemplo E66.0.'); return null; }
+  const hit = CID_LISTA.find(c => c[0] === code);
+  return { cid:code, cidNome: hit ? hit[1] : '' };
+}
+function salvarUltimaConsulta(pid, eid){
+  const p = DB.pacientes.find(x => x.id === pid), e = p && (p.evol || []).find(x => x.id === eid);
+  if(!e) return;
+  const c = cidDeTexto(v('ueCid')); if(c === null) return;
+  Object.assign(e, { data: v('ueData') || e.data, tipo: v('ueTipo'), objetivo: v('ueObjetivo'), diag: v('ueDiag'), texto: v('ueTexto') });
+  if(c.cid){ e.cid = c.cid; e.cidNome = c.cidNome; } else { delete e.cid; delete e.cidNome; }
+  salvar(); render(); alert('Consulta salva.');
+}
+function salvarFichaCompleta(pid){
+  const p = DB.pacientes.find(x => x.id === pid); if(!p) return;
+  p.ficha = { queixa:v('pfQueixa'), hist:v('pfHist'), med:v('pfMed'), alerg:v('pfAlerg'), hab:v('pfHab'), ativ:v('pfAtiv'), exam:v('pfExam') };
+  salvar(); render(); alert('Ficha salva.');
+}
+function rFichaCompleta(p){
+  const ord = lista => lista.slice().sort((a,b) => a.data < b.data ? 1 : -1);
+  const ue = ord(p.evol || [])[0];
+  const ua = ord(p.antro || [])[0];
+  const up = ord(p.presc || [])[0];
+  const exames = ord(p.exames || []).slice(0, 8);
+  const f = p.ficha || {};
+  const pc = p.preconsulta;
+  const cons = p.consumo && p.consumo.r24 && p.consumo.r24.refeicoes ? p.consumo.r24.refeicoes.filter(r => r.itens.length) : [];
+  const proximas = consultasAg().filter(a => a.pacienteId === p.id && a.data >= hoje() && a.status !== 'Cancelado')
+    .sort((a,b) => (a.data + a.hora) < (b.data + b.hora) ? -1 : 1);
+  const bloco = (titulo, corpo, acao) => `<div style="border-top:1px solid var(--line);padding:12px 0">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><h3 style="margin:0;font-size:14px;color:var(--brand)">${titulo}</h3>${acao || ''}</div>
+    <div style="margin-top:8px">${corpo}</div></div>`;
+  const campo = (rotulo, valor) => `<div><b>${rotulo}:</b> ${valor}</div>`;
+  const areaFicha = (id, rot, val) => `<label>${rot}<textarea id="${id}">${esc(val || '')}</textarea></label>`;
+
+  const secUltConsulta = ue
+    ? `<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(190px,1fr))">
+        <label>Data<input type="date" id="ueData" value="${esc(ue.data)}"></label>
+        <label>Tipo de consulta<select id="ueTipo">${TIPOS_CONSULTA.map(x => `<option ${x === ue.tipo ? 'selected' : ''}>${x}</option>`).join('')}</select></label>
+        <label>CID-10 (opcional)<input list="dl-cid" id="ueCid" value="${esc(ue.cid ? ue.cid + (ue.cidNome ? ' · ' + ue.cidNome : '') : '')}"></label>
+        <label>Objetivo<input id="ueObjetivo" value="${esc(ue.objetivo || '')}"></label>
+        <label>Diagnóstico<input id="ueDiag" value="${esc(ue.diag || '')}"></label>
+      </div>
+      <label style="margin-top:8px">Evolução e conduta<textarea id="ueTexto">${esc(ue.texto || '')}</textarea></label>
+      <div style="margin-top:8px"><button class="btn" onclick="salvarUltimaConsulta('${p.id}','${ue.id}')">Salvar consulta</button></div>`
+    : `<div class="empty">Nenhuma consulta registrada.</div><div style="margin-top:8px"><button class="btn sec mini" onclick="irPara('prontuario')">Registrar consulta</button></div>`;
+
+  const secFicha = `<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr))">
+      ${areaFicha('pfQueixa','Queixa principal', f.queixa)}
+      ${areaFicha('pfHist','História clínica e doenças prévias', f.hist)}
+      ${areaFicha('pfMed','Medicamentos em uso', f.med)}
+      ${areaFicha('pfAlerg','Alergias e intolerâncias alimentares', f.alerg)}
+      ${areaFicha('pfHab','Hábitos alimentares e rotina de refeições', f.hab)}
+      ${areaFicha('pfAtiv','Atividade física, sono, tabagismo e etilismo', f.ativ)}
+      ${areaFicha('pfExam','Resumo de exames', f.exam)}
+     </div>
+     <div style="margin-top:8px"><button class="btn" onclick="salvarFichaCompleta('${p.id}')">Salvar ficha</button></div>`;
+
+  const secPre = pc
+    ? `<div style="background:#fde8ee;border-radius:8px;padding:10px 12px"><b>Resumo para a consulta</b>
+        ${resumoPreConsulta(pc.r).map(([k, val]) => `<div style="margin-top:6px"><b>${esc(k)}:</b> <span style="white-space:pre-wrap">${esc(val)}</span></div>`).join('') || '<div class="muted">Nada marcado no resumo.</div>'}
+       </div>
+       <details style="margin-top:8px"><summary>Ver todas as respostas (${(pc.respostas || []).length})</summary>
+        ${agruparPreConsulta(pc.respostas).map(sec => `<h3 style="margin:12px 0 4px">${esc(sec.titulo)}</h3>` +
+          sec.itens.map(a => `<div style="border-top:1px solid var(--line);padding:6px 0"><b>${esc(a.pergunta)}</b><div style="white-space:pre-wrap">${esc(a.resposta)}</div></div>`).join('')).join('')}
+       </details>`
+    : '<div class="muted">Nenhuma pré-consulta recebida.</div>';
+
+  const secAvaliacao = ua
+    ? (() => { const c = calcAntro(ua, p); return `${campo('Data', fmtData(ua.data))}
+        ${campo('Peso / altura', fmt(ua.peso) + ' kg · ' + fmt(ua.altura, 0) + ' cm')}
+        ${campo('IMC', fmt(c.imc) + ' kg/m² · ' + esc(c.cls))}
+        ${campo('Gordura corporal', c.gc == null ? '—' : fmt(c.gc) + '%')}
+        ${campo('Massa gorda / massa magra', (c.mg == null ? '—' : fmt(c.mg) + ' kg') + ' / ' + (c.mm == null ? '—' : fmt(c.mm) + ' kg'))}`; })()
+    : '<div class="muted">Nenhuma avaliação antropométrica.</div>';
+
+  const secConsumo = cons.length
+    ? `${campo('Recordatório 24 h', cons.length + ' refeição(ões)')}
+       <ul style="margin:6px 0 0 18px">${cons.map(r => `<li>${esc(r.nome)}: ${r.itens.length} item(ns)</li>`).join('')}</ul>`
+    : '<div class="muted">Nenhum recordatório de 24 h registrado.</div>';
+
+  const secPresc = up
+    ? `${campo('Data', fmtData(up.data))}
+       ${campo('Título', esc(up.titulo))}
+       ${campo('VET (kcal)', fmt(up.vetManual || metas(up, p).vet, 0))}
+       ${campo('Refeições', up.refeicoes.length)}`
+    : '<div class="muted">Nenhuma prescrição.</div>';
+
+  const secExames = exames.length
+    ? `<div style="overflow-x:auto"><table><thead><tr><th>Data</th><th>Exame</th><th>Resultado</th></tr></thead><tbody>
+        ${exames.map(e => `<tr><td>${fmtData(e.data)}</td><td>${esc(e.exame)}</td><td>${esc(e.valor)} ${esc(e.unidade || '')}</td></tr>`).join('')}
+       </tbody></table></div>`
+    : '<div class="muted">Nenhum exame registrado.</div>';
+
+  const secProximas = proximas.length
+    ? proximas.map(a => `<div>${fmtData(a.data)} · ${esc(a.hora)} · ${esc(a.tipo || '')} · ${esc(a.status)}</div>`).join('')
+    : '<div class="muted">Nenhuma consulta agendada.</div>';
+
+  return `<div class="card" id="fichaCompleta">
+    <h2>Ficha completa · ${esc(p.nome)}</h2>
+    ${bloco('Cadastro', `${formPaciente(p,'ed')}<div style="margin-top:10px"><button class="btn" onclick="salvarPaciente('${p.id}')">Salvar cadastro</button></div>`)}
+    ${bloco('Última consulta', secUltConsulta)}
+    ${bloco('Ficha clínica', secFicha)}
+    ${bloco('Pré-consulta enviada pelo paciente', secPre)}
+    ${bloco('Última avaliação', secAvaliacao, '<button class="btn sec mini" onclick="irPara(\'antropometria\')">Editar avaliações</button>')}
+    ${bloco('Último consumo', secConsumo, '<button class="btn sec mini" onclick="irPara(\'consumo\')">Editar consumo</button>')}
+    ${bloco('Última prescrição', secPresc, up ? `<button class="btn sec mini" onclick="abrirPresc('${up.id}')">Abrir prescrição</button>` : '')}
+    ${bloco('Exames recentes', secExames, '<button class="btn sec mini" onclick="irPara(\'exames\')">Editar exames</button>')}
+    ${bloco('Próximas consultas', secProximas, '<button class="btn sec mini" onclick="irPara(\'agenda\')">Agenda</button>')}
+  </div>`;
+}
 function rPacientes(){
   const el = document.getElementById('tab-pacientes'), p = pac();
   const lista = DB.pacientes.slice().sort((a,b) => a.nome.localeCompare(b.nome, 'pt-BR'));
@@ -759,13 +877,12 @@ function rPacientes(){
      <p class="muted">Abra o arquivo .json que o paciente enviou pelo WhatsApp. O cadastro é localizado pelo nome e pela data de nascimento; se não existir, é criado.</p>
      <input type="file" accept=".json,application/json" onchange="importarPreConsulta(this)">
      <div id="preStatus" style="margin-top:8px"></div></div>
-  ${p ? `<div class="card"><h2>Dados do paciente ativo</h2>${formPaciente(p,'ed')}
-     <div style="margin-top:10px"><button class="btn" onclick="salvarPaciente('${p.id}')">Salvar alterações</button></div></div>` : ''}
+  ${p ? rFichaCompleta(p) : ''}
   <div class="card"><h2>Novo paciente</h2>${formPaciente(null,'np')}
      <div style="margin-top:10px"><button class="btn" onclick="novoPaciente()">Cadastrar e ativar</button></div></div>
   <div class="card"><h2>Pacientes cadastrados (${DB.pacientes.length})</h2>
   ${lista.length ? `<div style="overflow-x:auto"><table><thead><tr><th>Nome</th><th>Sexo</th><th>Idade</th><th>Telefone</th><th class="num">Avaliações</th><th class="num">Prescrições</th><th></th></tr></thead><tbody>
-    ${lista.map(x => `<tr><td><b>${esc(x.nome)}</b>${x.id===DB.ativo?' <span class="tag">ativo</span>':''}</td><td>${x.sexo==='M'?'Masculino':'Feminino'}</td><td>${idadeEm(x.nasc) ?? '—'}</td><td>${esc(x.tel||'')}</td><td class="num">${(x.antro||[]).length}</td><td class="num">${(x.presc||[]).length}</td><td style="white-space:nowrap"><button class="btn sec mini" onclick="ativar('${x.id}')">Ativar</button> <button class="btn danger mini" onclick="excluirPaciente('${x.id}')">Excluir</button></td></tr>`).join('')}
+    ${lista.map(x => `<tr><td><b>${esc(x.nome)}</b>${x.id===DB.ativo?' <span class="tag">ativo</span>':''}</td><td>${x.sexo==='M'?'Masculino':'Feminino'}</td><td>${idadeEm(x.nasc) ?? '—'}</td><td>${esc(x.tel||'')}</td><td class="num">${(x.antro||[]).length}</td><td class="num">${(x.presc||[]).length}</td><td style="white-space:nowrap"><button class="btn sec mini" onclick="abrirFicha('${x.id}')">Abrir</button> <button class="btn danger mini" onclick="excluirPaciente('${x.id}')">Excluir</button></td></tr>`).join('')}
     </tbody></table></div>` : '<div class="empty">Nenhum paciente cadastrado ainda.</div>'}
   </div>`;
 }
