@@ -101,6 +101,7 @@ th{font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
     <button data-tab="energia">Energia</button>
     <button data-tab="consumo">Consumo</button>
     <button data-tab="prontuario">Prontuário</button>
+    <button data-tab="resumo">Resumo IA</button>
     <button data-tab="exames">Exames</button>
     <button data-tab="fotos">Fotos</button>
     <button data-tab="prescricao">Prescrição</button>
@@ -124,6 +125,7 @@ th{font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
   <section id="tab-energia" class="hide"></section>
   <section id="tab-consumo" class="hide"></section>
   <section id="tab-prontuario" class="hide"></section>
+  <section id="tab-resumo" class="hide"></section>
   <section id="tab-exames" class="hide"></section>
   <section id="tab-fotos" class="hide"></section>
   <section id="tab-prescricao" class="hide"></section>
@@ -3171,6 +3173,159 @@ function rBackup(){
     <button class="btn danger" onclick="apagarTudo()">Apagar todos os dados deste navegador</button></div>`;
 }
 
+/* ---------- resumo do paciente para IA ---------- */
+const PROMPT_IA = `Você é um assistente de apoio à decisão para nutricionistas clínicos brasileiros. Com base no resumo abaixo, de um paciente, produza:
+1. Síntese do caso em até 5 linhas.
+2. Pontos de atenção, em ordem de prioridade (riscos nutricionais, exames alterados e sinais que merecem encaminhamento médico).
+3. Insights para a conduta nutricional, baseados diretamente nos dados (metas, ajustes de alimentação e de hábitos).
+4. Lacunas de informação e perguntas para a próxima consulta.
+5. Mensagens para o paciente: de 3 a 5 frases curtas, em linguagem simples.
+
+Regras: use somente os dados fornecidos e diga quando algo não estiver informado. Não faça diagnóstico médico nem prescreva medicamentos. Indique o que precisa de confirmação profissional. Quando citar uma faixa de referência ou um cálculo, diga de onde vem. Responda em português do Brasil.
+
+===== RESUMO DO PACIENTE =====
+`;
+function montarResumoTexto(p, opts){
+  const L = [];
+  const sec = (titulo) => { L.push('', titulo); };
+  const linha = (rot, val) => { const t = val == null ? '' : String(val).trim(); if(t) L.push(rot + ': ' + t); };
+  const f = (x, d, u) => x == null || isNaN(x) ? 'não informado' : fmt(x, d) + (u || '');
+  const ficha = p.ficha || {};
+  const pc = p.preconsulta;
+
+  sec('DADOS DO PACIENTE');
+  linha('Sexo', p.sexo === 'M' ? 'masculino' : 'feminino');
+  linha('Idade', idadeEm(p.nasc) != null ? idadeEm(p.nasc) + ' anos' : '');
+  if(!opts.oculta){
+    linha('Nome', p.nome); linha('Data de nascimento', fmtData(p.nasc)); linha('Profissão', p.prof);
+  }
+  linha('Objetivo do tratamento', p.objetivo);
+
+  sec('HISTÓRICO CLÍNICO (cadastro e ficha)');
+  linha('Queixa principal', ficha.queixa);
+  linha('História clínica e doenças prévias', ficha.hist);
+  linha('Medicamentos em uso', ficha.med);
+  linha('Alergias e intolerâncias alimentares', ficha.alerg);
+  linha('Hábitos alimentares e rotina', ficha.hab);
+  linha('Atividade física, sono, tabagismo e etilismo', ficha.ativ);
+  linha('Resumo de exames (ficha)', ficha.exam);
+  linha('Observações gerais', p.obs);
+
+  if(opts.pre && pc){
+    const resp = (pc.respostas || []).filter(a => !(opts.oculta && ['nome','nasc','tel'].includes(a.id)));
+    sec('PRÉ-CONSULTA ENVIADA PELO PACIENTE');
+    resumoPreConsulta(pc.r).forEach(([k, val]) => linha(k, val));
+    agruparPreConsulta(resp).forEach(sec2 => {
+      L.push('', sec2.titulo.toUpperCase());
+      sec2.itens.forEach(a => L.push(a.pergunta + ': ' + a.resposta));
+    });
+  }
+
+  const ua = ultimaAntro(p);
+  sec('AVALIAÇÃO ANTROPOMÉTRICA');
+  if(ua){
+    const c = calcAntro(ua, p);
+    linha('Data da última avaliação', fmtData(ua.data));
+    linha('Peso e altura', f(ua.peso, 1, ' kg') + ' · ' + f(ua.altura, 0, ' cm'));
+    linha('IMC', f(c.imc, 1, ' kg/m²') + (c.cls ? ' (' + c.cls + ')' : ''));
+    linha('Gordura corporal (Siri)', c.gc == null ? 'não calculada' : f(c.gc, 1, '%'));
+    linha('Massa gorda / massa magra', (c.mg == null ? 'não calculada' : f(c.mg, 1, ' kg')) + ' / ' + (c.mm == null ? 'não calculada' : f(c.mm, 1, ' kg')));
+    if(ua.cintura != null) linha('Circunferência da cintura', f(ua.cintura, 0, ' cm') + (c.cintCls && c.cintCls !== '—' ? ' (' + c.cintCls + ')' : ''));
+    if(c.rcq != null) linha('Relação cintura/quadril', f(c.rcq, 2) + ' (' + c.rcqCls + ')');
+    const antros = (p.antro || []).slice().sort((a,b) => a.data < b.data ? -1 : 1);
+    if(antros.length > 1){
+      const a1 = antros[0];
+      linha('Evolução do peso', f(a1.peso, 1, ' kg') + ' em ' + fmtData(a1.data) + ' → ' + f(ua.peso, 1, ' kg') + ' em ' + fmtData(ua.data) + ' (variação ' + fmt(ua.peso - a1.peso, 1) + ' kg)');
+    }
+  } else L.push('Nenhuma avaliação registrada.');
+
+  sec('CONSUMO ALIMENTAR');
+  const r24 = p.consumo && p.consumo.r24 && p.consumo.r24.refeicoes ? p.consumo.r24.refeicoes : [];
+  const cons = p.consumo || {};
+  if(r24.some(r => r.itens.length)){
+    L.push('Recordatório de 24 horas:');
+    r24.filter(r => r.itens.length).forEach(r => {
+      L.push('- ' + r.nome + ': ' + r.itens.map(it => { const a = MAPA.get(it.key); return (a ? a.nome : it.key) + (it.qtd ? ' (' + it.qtd + ' g)' : ''); }).join('; '));
+    });
+  } else L.push('Recordatório de 24 horas não registrado.');
+  linha('Gordura, açúcar e sal (quantidades mensais)', [cons.gordura, cons.acucar, cons.sal].filter(Boolean).join(' | '));
+
+  sec('PLANO ALIMENTAR ATUAL (prescrição mais recente)');
+  const up = (p.presc || []).slice().sort((a,b) => a.data < b.data ? 1 : -1)[0];
+  if(up){
+    let m = {};
+    try { m = metas(up, p) || {}; } catch(e){ m = {}; }
+    linha('Título e data', up.titulo + ' · ' + fmtData(up.data));
+    linha('Valor energético total', f(up.vetManual || m.vet, 0, ' kcal'));
+    linha('Proteína / lipídios / carboidratos', f(m.ptn, 0, ' g') + ' / ' + f(m.lip, 0, ' g') + ' / ' + f(m.cho, 0, ' g'));
+    linha('Refeições no plano', up.refeicoes.map(r => r.nome).join(', '));
+  } else L.push('Nenhuma prescrição registrada.');
+
+  sec('ÚLTIMA CONSULTA REGISTRADA');
+  const ue = (p.evol || []).slice().sort((a,b) => a.data < b.data ? 1 : -1)[0];
+  if(ue){
+    linha('Data e tipo', fmtData(ue.data) + (ue.tipo ? ' · ' + ue.tipo : ''));
+    linha('Objetivo', ue.objetivo);
+    linha('Diagnóstico nutricional', ue.diag);
+    linha('CID-10', ue.cid ? ue.cid + (ue.cidNome ? ' · ' + ue.cidNome : '') : '');
+    linha('Evolução e conduta', ue.texto);
+  } else L.push('Nenhuma consulta registrada.');
+
+  if(opts.exames){
+    sec('EXAMES');
+    const exs = (p.exames || []).slice().sort((a,b) => a.data < b.data ? 1 : -1);
+    if(exs.length){
+      exs.forEach(e => {
+        const al = alertaExame(e, p);
+        const ref = (e.refMin != null || e.refMax != null) ? ' (ref. ' + (e.refMin ?? '—') + '–' + (e.refMax ?? '—') + ')' : '';
+        L.push('- ' + fmtData(e.data) + ' · ' + e.exame + ': ' + e.valor + (e.unidade ? ' ' + e.unidade : '') + ref + (al ? ' → ' + al.nivel + ': ' + al.motivo : ''));
+      });
+    } else L.push('Nenhum exame registrado.');
+  }
+
+  sec('PONTOS DE ATENÇÃO (apontados automaticamente pelo app)');
+  const atencoes = [];
+  (p.exames || []).forEach(e => { const al = alertaExame(e, p); if(al) atencoes.push(e.exame + ' (' + fmtData(e.data) + '): ' + al.motivo); });
+  if(ua){ const c = calcAntro(ua, p); if(c.cintCls && /Risco/.test(c.cintCls)) atencoes.push('Cintura: ' + c.cintCls); if(c.rcqCls && /Risco/.test(c.rcqCls)) atencoes.push('Relação cintura/quadril: ' + c.rcqCls); }
+  if(atencoes.length) atencoes.forEach(t => L.push('- ' + t)); else L.push('Nenhum ponto de atenção apontado automaticamente.');
+
+  return L.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+}
+function rResumo(){
+  const el = document.getElementById('tab-resumo'), p = pac();
+  if(!p){ el.innerHTML = semPaciente(); return; }
+  el.innerHTML = `<div class="card"><h2>Resumo para IA · ${esc(p.nome)}</h2>
+    <p class="muted">Monta um resumo organizado do paciente e um prompt pronto para colar em uma IA, com insights para a conduta. Você pode editar o texto antes de copiar.</p>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0">
+      <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="rsOculta" checked onchange="gerarResumoIA()"> Ocultar identificação (nome, data de nascimento, contato)</label>
+      <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="rsPre" checked onchange="gerarResumoIA()"> Incluir pré-consulta</label>
+      <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="rsExames" checked onchange="gerarResumoIA()"> Incluir exames</label>
+    </div>
+    <div class="aviso">Ao colar em uma IA externa, o texto sai do seu computador. Mantenha a identificação oculta, confira o conteúdo e observe o sigilo profissional (LGPD).</div>
+    <label style="margin-top:12px">Prompt completo (instruções e resumo)<textarea id="rsPrompt" style="min-height:420px"></textarea></label>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn" onclick="copiarRS()">Copiar prompt</button>
+      <button class="btn sec" onclick="gerarResumoIA()">Gerar de novo</button>
+      <span class="muted" id="rsStatus"></span>
+    </div></div>`;
+  gerarResumoIA();
+}
+function gerarResumoIA(){
+  const p = pac(), campo = document.getElementById('rsPrompt'); if(!p || !campo) return;
+  campo.value = PROMPT_IA + montarResumoTexto(p, {
+    oculta: document.getElementById('rsOculta').checked,
+    pre: document.getElementById('rsPre').checked,
+    exames: document.getElementById('rsExames').checked
+  });
+}
+async function copiarRS(){
+  const campo = document.getElementById('rsPrompt'), st = document.getElementById('rsStatus');
+  let ok = false;
+  try { await navigator.clipboard.writeText(campo.value); ok = true; }
+  catch(e){ campo.select(); ok = document.execCommand('copy'); }
+  st.textContent = ok ? 'Copiado. Cole na IA de sua preferência.' : 'Não foi possível copiar; selecione o texto e copie manualmente.';
+}
+
 /* ---------- plano impresso ---------- */
 function montarPlano(p, pr){
   const m = metas(pr, p), t = somar(pr.refeicoes), a = ultimaAntro(p);
@@ -3242,7 +3397,7 @@ function render(){
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === TAB));
   document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hide', s.id !== 'tab-' + TAB));
   renderBarra();
-  ({inicio:rInicio, pacientes:rPacientes, agenda:rAgenda, antropometria:rAntro, energia:rEnergia, prontuario:rPront, exames:rExames, fotos:rFotos, prescricao:rPresc, alimentos:rAlim, financeiro:rFin, documentos:rDocs, consumo:rConsumo, backup:rBackup})[TAB]();
+  ({inicio:rInicio, pacientes:rPacientes, agenda:rAgenda, antropometria:rAntro, energia:rEnergia, prontuario:rPront, resumo:rResumo, exames:rExames, fotos:rFotos, prescricao:rPresc, alimentos:rAlim, financeiro:rFin, documentos:rDocs, consumo:rConsumo, backup:rBackup})[TAB]();
 }
 document.getElementById('nav').addEventListener('click', e => {
   const b = e.target.closest('button[data-tab]');
