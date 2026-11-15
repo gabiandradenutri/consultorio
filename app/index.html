@@ -1258,7 +1258,7 @@ function rPront(){
   ${preCard(p)}
   <div class="card"><h2>Ficha clínica · ${esc(p.nome)}</h2>
     <div class="row" style="align-items:flex-end;margin-bottom:10px"><label style="flex:0 1 280px">Modelo de anamnese<select id="fModelo">${Object.entries(MODELOS_ANAM).map(([k, m]) => `<option value="${k}">${m.nome}</option>`).join('')}</select></label><button class="btn sec mini" onclick="aplicarModelo()">Inserir modelo nos campos vazios</button></div>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+    <div class="grid" style="grid-template-columns:1fr">
       ${ta('fQueixa','Queixa principal', f.queixa)}
       ${ta('fHist','História clínica e doenças prévias', f.hist)}
       ${ta('fMed','Medicamentos em uso', f.med)}
