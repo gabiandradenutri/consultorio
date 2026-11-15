@@ -22,6 +22,13 @@ main{padding:18px 20px;max-width:1240px;margin:0 auto}
 label{display:flex;flex-direction:column;font-size:12px;color:var(--muted);gap:4px}
 input,select,textarea{font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:6px;color:var(--ink);background:#fff;width:100%}
 textarea{min-height:64px;resize:vertical}
+/* prontuário com mais espaço entre campos */
+#tab-prontuario .card{padding:24px 26px;margin-bottom:22px}
+#tab-prontuario .card h2{font-size:17px;margin-bottom:16px}
+#tab-prontuario .grid{gap:18px}
+#tab-prontuario label{font-size:13px;gap:6px}
+#tab-prontuario input,#tab-prontuario select{padding:9px 11px}
+#tab-prontuario textarea{min-height:130px;padding:10px 12px;font-size:15px}
 button{font:inherit}
 .btn{background:var(--brand);color:#fff;border:0;padding:8px 14px;border-radius:6px;cursor:pointer}
 .sec{background:#fff;color:var(--brand);border:1px solid var(--brand)}
@@ -768,7 +775,7 @@ function novoPaciente(){
   const d = lerPaciente('np');
   if(!d.nome){ alert('Informe o nome do paciente.'); return; }
   const p = Object.assign({ id:uid(), antro:[], evol:[], presc:[], ficha:{} }, d);
-  DB.pacientes.push(p); DB.ativo = p.id; PRESC_ID = null; salvar(); TAB = 'antropometria'; render();
+  DB.pacientes.push(p); DB.ativo = p.id; PRESC_ID = null; salvar(); TAB = 'prontuario'; render();
 }
 function salvarPaciente(id){
   const p = DB.pacientes.find(x => x.id === id), d = lerPaciente('ed');
