@@ -3105,22 +3105,25 @@ function rConsumo(){
 }
 
 /* ---------- anamnese: modelos ---------- */
+const MODELO_ADULTO_CAMPOS = {
+    queixa:'Objetivo da consulta (queixa principal):\n',
+    hist:'Patologias:\nCirurgias (motivo):\nJá fez tratamento ou acompanhamento dietético? Quais foram os fatores facilitadores e dificultadores:\nHistória familiar (grau de parentesco): obesidade, doença cardiovascular, câncer, hipertensão, diabetes melito, doença renal, hipo ou hipertireoidismo, dislipidemia:\nSintomas gastrintestinais (refluxo, azia, náuseas e vômitos, flatulência, alteração do apetite, compressão, dificuldade de deglutir, eructação, aftas):\nHábito intestinal (frequência, consistência pela escala de Bristol, sensação de esvaziamento completo, esforço para evacuar):\n',
+    med:'Medicamentos em uso contínuo (nome comercial ou princípio ativo, objetivo ou indicação, dose, horário e data de início):\nSuplementos (qual e quantidade):\n',
+    alerg:'Alergia e/ou intolerância alimentar (quais alimentos):\nAversão alimentar ou alimentos rejeitados em dietas anteriores:\nPreferências alimentares:\n',
+    hab:'Número de refeições ao dia; horários fixos (café da manhã e almoço); local das refeições; quem prepara:\nBelisca entre as refeições (o quê):\nIngestão hídrica diária:\nEscala de Armstrong:\nGordura (vegetal ou animal, qual), açúcar, adoçante, sal e temperos prontos:\nConsumo mensal de alimentos e número de pessoas:\nCuidados de higiene dos alimentos:\nRelação alimentação com ansiedade ou estresse:\nPrótese dentária ou aparelho ortodôntico; mastigação (boa, ruim, lenta ou rápida):\n',
+    ativ:'Horas de sono por noite e qualidade do sono (boa ou ruim):\nÁlcool (tipo, frequência e quantidade):\nRefrigerante (tipo, frequência e quantidade):\nSucos artificiais (tipo, frequência e quantidade):\nTabagismo (cigarros por dia):\nHorário de trabalho ou escola:\nAtividade física (tipo, frequência, horário e duração):\n',
+    exam:'Exames bioquímicos (data): glicemia, hemoglobina, hematócrito, leucócitos, plaquetas, colesterol total, LDL, HDL, VLDL, triglicerídeos, creatinina, ureia, ácido úrico, TSH, T4, GGT, TGO, TGP, ferro, ferritina, sódio, potássio, vitamina B12, vitamina D:\nPressão arterial:\n'
+};
 const MODELOS_ANAM = {
-  adulto: { nome:'Adulto', campos:{
-    hist:'Doenças prévias (hipertensão, diabetes, dislipidemia, doenças gastrointestinais, renais ou cardíacas):\n',
-    med:'Medicamentos em uso (nome, dose e horário) e suplementos:\n',
-    alerg:'Alergias e intolerâncias alimentares (incluindo lactose e glúten):\n',
-    hab:'Número de refeições por dia e horários; quem prepara as refeições; consumo de água e de bebidas açucaradas:\n',
-    ativ:'Atividade física (tipo, frequência e duração); horas de sono; tabagismo; consumo de álcool:\n',
-    exam:'Exames recentes (data e principais resultados):\n' } },
-  idoso: { nome:'Idoso (60 anos ou mais)', campos:{
-    hist:'Quedas, fraturas, perda de peso não intencional, doenças prévias e internações:\n',
-    med:'Medicamentos em uso (inclui interações com alimentos):\n',
-    alerg:'Alergias e intolerâncias alimentares; restrições prescritas:\n',
-    hab:'Apetite; mastigação e deglutição (uso de prótese dentária); quem faz as compras e prepara as refeições:\n',
-    ativ:'Atividade física; sono; humor; vida social:\n',
-    exam:'Exames recentes (albumina, hemoglobina, vitamina D, colesterol, glicemia):\n' } },
+  adulto: { nome:'Adulto', campos: MODELO_ADULTO_CAMPOS },
+  idoso: { nome:'Idoso (60 anos ou mais)', campos: {
+    ...MODELO_ADULTO_CAMPOS,
+    hist: MODELO_ADULTO_CAMPOS.hist + 'Quedas nos últimos 12 meses, fraturas e perda de peso não intencional:\n',
+    hab: MODELO_ADULTO_CAMPOS.hab + 'Mastigação e deglutição: dificuldade para mastigar, tosse ou engasgo ao comer, necessidade de alimentos triturados ou com consistência modificada; uso de prótese dentária:\nApetite; quem faz as compras e prepara as refeições:\n',
+    ativ: MODELO_ADULTO_CAMPOS.ativ + 'Deambulação: dificuldade para caminhar, uso de bengala, andador ou cadeira de rodas:\nAutonomia nas atividades do dia a dia (alimentar-se, vestir-se, banhar-se):\nVisão e audição (se atrapalham as refeições ou as compras):\nHumor e vida social:\n',
+    exam: MODELO_ADULTO_CAMPOS.exam + 'Albumina (se disponível); dinamometria (força de preensão manual, em kgf):\n' } },
   gestante: { nome:'Gestante', campos:{
+    queixa:'Objetivo da consulta (queixa principal):\n',
     hist:'DPP, idade gestacional atual, gestações anteriores e intercorrências:\n',
     med:'Medicamentos e suplementos em uso (ácido fólico, ferro, vitaminas):\n',
     alerg:'Alergias e intolerâncias alimentares; aversões e náuseas:\n',
@@ -3128,6 +3131,7 @@ const MODELOS_ANAM = {
     ativ:'Atividade física adaptada à gestação; sono; tabagismo; álcool:\n',
     exam:'Exames recentes (hemoglobina, glicemia, urina e sorologias do pré-natal):\n' } },
   crianca: { nome:'Criança ou adolescente', campos:{
+    queixa:'Objetivo da consulta (queixa principal):\n',
     hist:'Nascimento (idade gestacional e peso ao nascer), aleitamento materno e doenças prévias:\n',
     med:'Medicamentos e suplementos em uso:\n',
     alerg:'Alergias e intolerâncias alimentares (incluindo leite de vaca e glúten):\n',
