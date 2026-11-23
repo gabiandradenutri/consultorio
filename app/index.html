@@ -2108,22 +2108,18 @@ function blocoTotais(t, m){
     ['Energia (kcal)', t.k, m.vet, 0],
     ['Proteína (g)', t.p, m.ptn, 1],
     ['Lipídeos (g)', t.l, m.lip, 1],
-    ['Carboidratos (g)', t.c, m.cho, 1],
-    ['Fibra alimentar (g)', t.f, null, 1],
-    ['Colesterol (mg)', t.col, null, 0],
-    ['Cálcio (mg)', t.ca, null, 0],
-    ['Magnésio (mg)', t.mg, null, 0]
+    ['Carboidratos (g)', t.c, m.cho, 1]
   ];
   const dist = t.k > 0 ? `Distribuição calórica calculada: ${distribuicaoCalorica(t)}.` : '';
   return `<div class="card"><h2>Total do dia × metas</h2>
    <div style="overflow-x:auto"><table><thead><tr><th>Nutriente</th><th class="num">Meta</th><th class="num">Prescrito</th><th class="num">% da meta</th><th>Situação</th></tr></thead><tbody>
    ${linhas.map(([nome,real,meta,d]) => {
      const pc = meta ? real / meta * 100 : null;
-     const st = pc == null ? null : (pc >= 90 && pc <= 110) ? ['Adequado','ok'] : (pc >= 80 && pc <= 120) ? ['Ajustar','warn'] : ['Fora da meta','bad'];
+     const st = pc == null ? null : (pc >= 95 && pc <= 105) ? ['Adequado','ok'] : (pc >= 80 && pc <= 120) ? ['Ajustar','warn'] : ['Fora da meta','bad'];
      return `<tr><td>${nome}</td><td class="num">${meta == null ? '—' : fmt(meta,d)}</td><td class="num">${fmt(real,d)}</td><td class="num">${pc == null ? '—' : fmt(pc,0)+'%'}</td><td>${st ? `<span class="tag ${st[1]}">${st[0]}</span>` : '<span class="muted">sem meta</span>'}</td></tr>`;
    }).join('')}
    </tbody></table></div>
-   <p class="muted" style="font-size:12px;margin-top:8px">${dist} Alimentos sem valor na fonte (—) entram como zero. Faixas: 90–110% adequado; 80–120% ajustar.</p></div>`;
+   <p class="muted" style="font-size:12px;margin-top:8px">${dist} Alimentos sem valor na fonte (—) entram como zero. Faixas: 95–105% adequado; 80–120% ajustar.</p></div>`;
 }
 function listaPresc(p){
   const lista = (p.presc || []).slice().sort((a,b) => a.data < b.data ? 1 : -1);
