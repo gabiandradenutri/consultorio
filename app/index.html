@@ -2114,7 +2114,7 @@ function blocoTotais(t, m){
     ['Cálcio (mg)', t.ca, null, 0],
     ['Magnésio (mg)', t.mg, null, 0]
   ];
-  const dist = t.k > 0 ? `Distribuição calórica calculada: PTN ${fmt(t.p*4/t.k*100,0)}% · LIP ${fmt(t.l*9/t.k*100,0)}% · CHO ${fmt(t.c*4/t.k*100,0)}%.` : '';
+  const dist = t.k > 0 ? `Distribuição calórica calculada: ${distribuicaoCalorica(t)}.` : '';
   return `<div class="card"><h2>Total do dia × metas</h2>
    <div style="overflow-x:auto"><table><thead><tr><th>Nutriente</th><th class="num">Meta</th><th class="num">Prescrito</th><th class="num">% da meta</th><th>Situação</th></tr></thead><tbody>
    ${linhas.map(([nome,real,meta,d]) => {
@@ -3360,16 +3360,27 @@ async function copiarRS(){
 }
 
 /* ---------- plano impresso ---------- */
+/* distribuição calórica pelas kcal dos macronutrientes (4/4/9), somando exatamente 100% */
+function distribuicaoCalorica(t){
+  const kmac = t.p*4 + t.l*9 + t.c*4;
+  if(!(kmac > 0)) return '—';
+  const r = { PTN: Math.round(t.p*4/kmac*10000)/100, LIP: Math.round(t.l*9/kmac*10000)/100, CHO: Math.round(t.c*4/kmac*10000)/100 };
+  const soma = r.PTN + r.LIP + r.CHO;
+  const maior = ['PTN','LIP','CHO'].reduce((a,b) => r[a] >= r[b] ? a : b);
+  r[maior] = Math.round((r[maior] + (100 - soma)) * 100) / 100;
+  return `PTN ${fmt(r.PTN,2)}% · LIP ${fmt(r.LIP,2)}% · CHO ${fmt(r.CHO,2)}%`;
+}
 function montarPlano(p, pr){
   const m = metas(pr, p), t = somar(pr.refeicoes), a = ultimaAntro(p);
   const idade = idadeEm(p.nasc, pr.data);
   const vet = pr.vetManual || m.vet;
   const ult = (p.evol || []).slice().sort((x,y) => x.data < y.data ? 1 : -1).find(e => e.objetivo);
-  const resumo = pr.refeicoes.map(r => {
+  const impressas = pr.refeicoes.filter(r => r.itens && r.itens.length);
+  const resumo = impressas.map(r => {
     const s = somar([r]);
     return `<tr><td>${esc(r.hora || '—')}</td><td>${esc(r.nome)}</td><td class="num">${fmt(s.k,0)}</td><td class="num">${fmt(s.p)}</td><td class="num">${fmt(s.l)}</td><td class="num">${fmt(s.c)}</td><td class="num">${fmt(s.f)}</td></tr>`;
   }).join('');
-  const boxes = pr.refeicoes.map(r => {
+  const boxes = impressas.map(r => {
     const s = somar([r]);
     const linhas = r.itens.map(it => {
       const x = MAPA.get(it.key), n = nutrientes(it.key, it.qtd) || {};
@@ -3381,7 +3392,7 @@ function montarPlano(p, pr){
       <div class="refmac">PTN ${fmt(s.p)} g · LIP ${fmt(s.l)} g · CHO ${fmt(s.c)} g · Fibra ${fmt(s.f)} g</div>
     </div>`;
   }).join('');
-  const dist = t.k > 0 ? `PTN ${fmt(t.p*4/t.k*100,0)}% · LIP ${fmt(t.l*9/t.k*100,0)}% · CHO ${fmt(t.c*4/t.k*100,0)}%` : '—';
+  const dist = distribuicaoCalorica(t);
   return `
   <h1>${esc(pr.titulo)}</h1>
   <p class="muted" style="margin:0 0 6px">Data do plano: ${fmtData(pr.data)}</p>
@@ -3406,7 +3417,7 @@ function montarPlano(p, pr){
     <div>______________________________<br>Nutricionista responsável<br>CRN: ____________</div>
     <div>______________________________<br>Paciente</div>
   </div>
-  <p class="muted rodape">Composição dos alimentos: TACO, 4ª edição ampliada e revisada; TBCA para itens ausentes na TACO. Valores calculados pelo sistema; alimentos sem dado na fonte entram como zero. Emitido em ${fmtData(hoje())}.</p>`;
+  <p class="muted rodape">Valores calculados pelo sistema; alimentos sem dado entram como zero. Emitido em ${fmtData(hoje())}.</p>`;
 }
 function imprimirPlano(){
   const p = pac(), pr = prAtual();
